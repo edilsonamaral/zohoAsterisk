@@ -1,0 +1,16 @@
+context ivr-EVOLVE {
+	includes {BASICS;parkedcalls;};
+
+	hint(SIP/EVOLVE113) EVOLVE113 => jump ${EXTEN:${LEN(${CONTEXT:4})}};
+
+        100 => {
+                ivr:
+                Set(_CUSTOMERSNAME=${CONTEXT:4});
+
+//		jump talk@BASICS;
+		
+                &do-CUSTOM-MENU();
+
+                Hangup();
+        };
+};

@@ -1,0 +1,228 @@
+context from-callcentric {
+        switches  {
+        };
+
+        _ZXXXXXXXXX => {
+                jump s;
+        };
+
+        _+1ZXXXXXXXXX => {
+                jump s;
+        };
+
+        _+XXXXNXXXXXXX => {
+                jump s;
+        };
+
+        _55XXNXXXXXXX => {
+                jump s;
+        };
+
+        _+51XXXXXXXX => {
+                // Peru
+                jump s;
+        };
+
+        _351XXXXXXXXX => {
+                // Portugal
+                jump s;
+        };
+
+        _34XXXXXXXXX => {
+                // Spain
+                jump s;
+        };
+
+        _0800. => {
+                jump s;
+        };
+
+        _55800. => {
+                jump s;
+        };
+
+       _[A-Za-z0-1].ZX0 => {
+                // to match extension with name
+                // look for variable comming from internal server call
+                Set(TIMEOUT(absolute)=7200);
+
+                if(${LEN(${INTERNALCALL_TO})}>0){
+                        // call is comming from this server
+                        Set(_Var_All=${INTERNALCALL_TO});
+                }
+                else{
+                        Set(_Var_All=${SIP_HEADER(TO)});
+                }
+                Set(Caller=${CUT(Var_All,@,1)});   //  divide o header em 2
+                Set(Var_TO=${Caller:5});           //  pega so os numeros depois dos 5 primeiros caracteres
+		Set(Original_Var_TO=${Var_TO});
+                Set(CDR(destination)=${Var_TO});
+
+                jump s;
+        };
+
+        s => {
+		Set(Var_From=${CALLERID(num)} );
+
+                //   this could be a number from callcentric, a extension name from another server or hacker sending a dial number
+                //   if the call came from IAX Var_All should be populated so don't reset it, use SIP_HEADER instead
+		Set(Var_TO=);
+		Set(Var_All=${SIP_HEADER(TO)});
+		Set(Caller=${CUT(Var_All,@,1)});    //  divide o header em 2
+		Set(Var_TO=${CUT(Caller,:,2)});
+
+		Set(Var_TO=${FILTER(0-9a-zA-Z,${Var_TO})}); // must either be a number or a letter (avoid sql injection)
+		Set(Original_Var_TO=${Var_TO});
+                //  let's see whether this is a call from another server
+
+                tamanho=${LEN(${Var_TO})};          //  size of the Var_TO variable
+                name=${Var_TO:0:$[${tamanho}-3]};   //  3 eh o tamanho do '100' que vem apos o nome da conta
+                accountname=${TOUPPER(${name})};    //  o nome da conta em upper case
+
+                if(${LEN(${accountname})}>0 && ${LEN(${Var_TO})}>0){
+                        &get-DID_DATA(${Var_TO:-10});
+                        if(${LEN(${DB_DID})}<10){
+				&trap("Zero or less than 10 size of DB_DID in 's' context");
+			}
+
+                        if(${LEN(${DB_PROFILE_NAME})}>0 && "${DB_PROFILE_NAME}"!="none"){
+				&get-profile(${DB_ACCOUNT},${DB_PROFILE_NAME});                        
+				if(${LEN(${maincallerid})}>0){
+					// there is a profile
+					Set(DB_FWD1=${Profile_FWD1});
+					Set(DB_FWD2=${Profile_FWD2});
+					Set(DB_FWD3=${Profile_FWD3});
+					Set(DB_LANGUAGE=${Profile_LANGUAGE});
+					Set(PROFILE_NAME=${Profile_name});
+					Set(PROFILE_PLAYPRIVACY=${Profile_playrecordwarning});
+				}else{
+					log(warning, No maincallerid for ${DB_ACCOUNT} did:${DB_DID} profile:${DB_PROFILE_NAME});
+				}
+			}
+                        
+                        if(${LEN(${maincallerid})}<10){
+				// If no maincallerid found via profile, try ODBC lookup as fallback
+				log(warning,Will get here if no Profile set);
+                                Set(result=${ODBC_GETDIDONACCOUNT(${accountname},${Var_TO})});
+                                if(${LEN(${result})}>0){
+                                        // account found
+                                        Set(maincallerid=${CUT(result,\,,1)});
+                                        Set(Var_TO=${maincallerid});   //  set maincallerid to varto to be evaluated below
+                                }
+                        }
+
+                        &dispatcher(0);
+                }else if(${LEN(${Var_TO})}>0){
+                        &dispatcher(0);
+                }
+                log(warning,  NO ACCOUNTCODE  hangup());
+                Hangup();
+        };
+
+        _[#09]. =>{
+                noop(trap  $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$);
+                &trap("#09 trap");
+                Hangup();
+        };
+
+        h => {
+                //Set(CUSTOMERSNAME=${CONTEXT:4});
+                &do-hangup();
+                Hangup();
+        };
+};
+
+context from-voipinnovations {
+        s => {
+                Set(Var_All=${SIP_HEADER(TO)});
+                Set(Caller=${CUT(Var_All,@,1)});   //  divide o header em 2
+		Set(Var_TO=${FILTER(0-9a-zA-Z,${Caller:5})});
+		Set(Original_Var_TO=${Var_TO});
+                if(${LEN(${Var_TO})}<10)
+                {
+                        Hangup();
+                }
+                &get-DID_DATA(${Var_TO:2});
+                if(${LEN(${DB_DID})}==0)
+                {
+                        &trap("Zero size for VoipInnovations");
+                }
+                &dispatcher(0);
+        };
+
+        _1NXXXXXXXXX => {
+                &get-DID_DATA(${EXTEN:-10});
+                if(${LEN(${DB_DID})}==0)
+                {
+                        &trap("${DB_DID}. Not found ");
+                }
+                &dispatcher(0);
+        };
+
+        _+1NXXXXXXXXX => {
+                &get-DID_DATA(${EXTEN:-10});
+                if(${LEN(${DB_DID})}==0)
+                {
+                        &trap("${DB_DID}. Not found ");
+                }
+                &dispatcher(0);
+        };
+
+        _+55X. => {
+                &get-DID_DATA(${EXTEN:-10});
+                if(${LEN(${DB_DID})}==0){
+                        //  Incoming did, NOT found
+                        //  Reject it
+                        &trap("${DB_DID}. Not found ");
+                }
+                &dispatcher(0);
+        };
+
+        _55. => {
+                &get-DID_DATA(${EXTEN:-10});
+                if(${LEN(${DB_DID})}==0){
+                        //  Incoming did, NOT found
+                        //  Reject it
+                        &trap("${DB_DID}. Not found ");
+                }
+                &dispatcher(0);
+        };
+
+        _+X. => {
+                &get-DID_DATA(${EXTEN:-10});
+                if(${LEN(${DB_DID})}==0){
+                        //  Incoming did, NOT found
+                        &trap("${DB_DID}. Not found ");
+                }
+                &dispatcher(0);
+        };
+
+        h => {
+                //Set(CUSTOMERSNAME=${CONTEXT:4});
+                &do-hangup();
+                Hangup();
+        };
+};
+
+context from-didww {
+        _5[587]. => {
+		Set(Var_All=${SIP_HEADER(TO)});
+		Set(Caller=${CUT(Var_All,@,1)});   //  divide o header em 2
+                        Set(Var_TO=${Caller:5});           //  pega so os numeros depois dos 5 primeiros caracteres
+                        Set(Var_TO=${FILTER(0-9a-zA-Z,${Var_TO})});
+			Set(Original_Var_TO=${Var_TO});
+                        if(${LEN(${Var_TO})}<10){
+                                        Hangup();
+                        }
+                        &get-DID_DATA(${Var_TO:2});
+                        if(${LEN(${DB_DID})}==0){
+                                        &trap("${DB_DID}. Not found DIDWW");
+                        }
+                        &dispatcher(0);
+                        Hangup();
+        };
+        h => {
+                        &do-hangup();
+                        Hangup();
+        };
+};

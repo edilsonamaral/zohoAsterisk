@@ -1,0 +1,866 @@
+context ivr-SPY {
+
+EVOLVE113 => {
+        CUSTOMERSNAME=EVOLVE;
+        Answer();
+        Verbose(2, Attempting to spy on SIP/EVOLVE113);
+        System(asterisk -rx "core show channels" > /tmp/channels.log);
+wait(2);
+        ChanSpy("SIP/EVOLVE113");
+        Verbose(2, ChanSpy exited);
+        if ("${CHANNEL(spy_status)}" = "NOCHAN") {
+            Playback(silence/1);
+            Verbose(2, No channel available for spying);
+        }
+        Hangup();
+    }
+
+    spy[X.] => {
+        CUSTOMERSNAME=${CONTEXT:4};
+        Answer();
+        noop(Edilson CahnSIP);
+        ChanSpy("SIP/EVOLVE113:3,q"); // Hardcoded, consider making dynamic
+        Hangup();
+    }
+
+    _X. => {
+        CUSTOMERSNAME=EVOLVE;
+        Answer();
+        noop(${EXTEN});
+        noop(${CUSTOMERSNAME});
+        ChanSpy("SIP/${EXTEN}@ivr-${CUSTOMERSNAME},qW");
+        Hangup();
+    }
+}
+
+context BASICS {
+        h => {
+		//Set(CUSTOMERSNAME=${CONTEXT:4});
+		&do-hangup();
+		Hangup();
+        };
+
+	i => {
+		Playback(pbx-invalidpark);
+		Hangup();
+	};
+
+	talk => {
+		Set(i=${IF($["0${i}"="016"]?7:$[0${i}+1])});
+		if("${i}"="1"){
+			MixMonitor(${UNIQUEID}.wav);
+		}
+		Playback(Lenny/Lenny${i});
+		BackgroundDetect(Lenny/backgroundnoise,1500);
+		return;
+	};
+
+        _**70 => {
+                Set(CUSTOMERSNAME=${CONTEXT:4});
+		Park(${CUSTOMERSNAME}_parkinglot);
+		Hangup();
+        };
+
+	700 => {
+		CUSTOMERSNAME=${CONTEXT:4};
+		Park(${CUSTOMERSNAME}_parkinglot);
+		Hangup();
+	};
+
+	_70[1-9] => {
+		Set(CUSTOMERSNAME=${CONTEXT:4});
+		CUSTOMERSNAME=${CONTEXT:4};
+		Set(CHANNEL(parkinglot)=${CUSTOMERSNAME}_parkinglot);
+		ParkedCall(${CHANNEL(parkinglot)},${EXTEN});
+		Hangup();
+	}
+        fakeatendedor => {
+                ivr:
+                Set(CUSTOMERSNAME=${CONTEXT:4});
+                Set(CHANNEL(language)=pt);
+                Set(CALLFILENAME=${CALLERID(num)}--time:${STRFTIME(,,%H:%M)});
+                Monitor(wav49,${CUSTOMERSNAME}/${CALLFILENAME});
+                Playback(${CUSTOMERSNAME}/fakeatendedor);
+                StopMonitor();
+                wait(0.5);
+                Hangup();
+        };
+
+	_**XXX => {
+		Set(CUSTOMERSNAME=${CONTEXT:4});
+		//Pickup(${CUSTOMERSNAME}${EXTEN:2}@ivr-${CUSTOMERSNAME});
+		PickupChan(SIP/${CUSTOMERSNAME}${EXTEN:2},p);
+	};
+
+        _**#. => {   // CISCO CALL PICKUP
+                Set(CUSTOMERSNAME=${CONTEXT:4});
+		Set(hasCompany=${REGEX("^${CUSTOMERSNAME}" ${EXTEN:3})});
+		if("${hasCompany}"=="1"){
+			PickupChan(SIP/${EXTEN:3},p);
+		}else{
+			log(warning, CISCO CALL PICKUP not in the write format);
+			Hangup();
+		}
+        };
+
+	*85 => {		
+
+		Hangup();
+	}
+
+        _1[123][0125]X=> {
+                CUSTOMERSNAME=${CONTEXT:4};
+                &get-BASICVARS(${CUSTOMERSNAME});
+                Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+                Set(CDR(server)=${SYSTEMNAME});
+                Set(CDR(destination)=${EXTEN});
+		Set(CDR(rateProvider)=internal);
+		StopMixMonitor();  // stop before voicemail begins
+                VoiceMail(${EXTEN:1}@VM-${CUSTOMERSNAME},u);
+		Hangup();
+        };
+
+        _2[12345][0125]X => {
+                CUSTOMERSNAME=${CONTEXT:4};
+		&get-RINGGROUP(${EXTEN:1});
+		noop(DIALGROUP=${DIALGROUP(${CUSTOMERSNAME}${EXTEN:1})}   );
+		SIPAddHeader(Call-Info:\;answer-after=0);
+                Set(peername=${CHANNEL(peername)});
+                peer=${FILTER(0-9,${peername})};
+
+		if(${LEN(${DIALGROUP(${CUSTOMERSNAME}${EXTEN:1})})}>0){
+			// there is a group setup
+			// Also ignore forward request
+                        Page(${DIALGROUP(${CUSTOMERSNAME})},30,iq);
+
+                }
+                else{
+			noop(DIAL VIVA VOZ  %%%%%%%%%%%%%%%%%%%%%%%%%%%);
+			&get-PEERINFO(${EXTEN:1});  // calee
+			&get-PEERINFO(${peer}); // caller
+			Set(status=${DEVICE_STATE(SIP/${CUSTOMERSNAME}${EXTEN:1})});
+
+	                if("${status}"=="NOT_INUSE"){
+				jump ${EXTEN:1};
+			}else{
+				Playback(user&is-curntly-busy);
+			}
+                }
+                Hangup();
+        };
+
+        1 => {
+                CUSTOMERSNAME=${CONTEXT:4};
+                &get-BASICVARS(${CUSTOMERSNAME});
+                Set(peername=${CHANNEL(peername)});
+		peer=${FILTER(0-9,${peername})};
+                &get-PEERINFO(${peer});
+                Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+                NoCDR();
+                VoiceMailMain(${CALLERID(num)}@VM-${CUSTOMERSNAME});
+                Hangup();
+        };
+
+        *78 => {
+                Answer();
+                Set(DB(SIP/DND/${CALLERID(num)})=1);
+                Set(DEVICE_STATE(Custom:VITAFLEX117)=BUSY);
+                Playback(beep);
+                Wait(1);
+                Hangup();
+        };
+
+        *79 => {
+                Answer();
+                NoOp(${DB_DELETE(SIP/DND/${CALLERID(num)})});
+                Set(DEVICE_STATE(Custom:VITAFLEX117)=NOT_INUSE);
+                Playback(beep);
+                Wait(1);
+                Hangup();
+        };
+
+        _9[12][12] => {
+                CUSTOMERSNAME=${CONTEXT:4};
+                &get-BASICVARS(${CUSTOMERSNAME});
+                Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+                Set(CDR(server)=${SYSTEMNAME});
+                Set(CDR(destination)=${EXTEN});
+		&send-email(account ${CUSTOMERSNAME} is calling 911 caller ${CALLERID(num)}, ${MAINSERVER});
+                &record(0);
+		Set(peer=${CHANNEL(peername)});
+		Set(CALLERID(num)=${DB_MAINCALLERID});
+		//see if the extension has a specific callerID
+                if(${LEN(${peer})}<=1){
+                        log(warning,HANGING UP! NOT A PEER!!!!! ACCOUNTCODE=${CUSTOMERSNAME});
+                        Hamgup();
+                }else{
+			Set(CDR(peerdialingout=${peer}));
+			// gets the DID provider
+			&get-PEER911PROVIDER(${peer});
+			if(${LEN(${DB_911PROVIDER})}>0 & ${LEN(${DB_911CALLERID})}>0){
+				Set(CALLERID(num)=1${DB_911CALLERID});
+				if(${EXTEN}=911){
+					&record(1);
+					Dial(SIP/911@sip.bulk911.com);
+				}else if(${EXTEN}=922){
+					// TEST of emergency service
+					Dial(SIP/922@sip.bulk911.com);
+				}
+			}
+		}			
+		Hangup();
+        };
+
+        0900 => {
+                CUSTOMERSNAME=${CONTEXT:4};
+                Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+                Set(CDR(server)=${SYSTEMNAME});
+		Set(CDR(destination)=${EXTEN});
+                Playback(invalid);
+                Hangup();
+        };
+
+        _*72XXX => {
+                CUSTOMERSNAME=${CONTEXT:4};
+                &get-BASICVARS(${CUSTOMERSNAME});
+                Set(peername=${CHANNEL(peername)});
+                peer=${FILTER(0-9,${peername})};
+
+                &get-PEERINFO(${peer});
+                &change-TRANSFERTO(${EXTEN:3},${peername});
+                Hangup();
+        };
+
+	_*72NXXXXXXXXX => {
+		CUSTOMERSNAME=${CONTEXT:4};
+                &get-BASICVARS(${CUSTOMERSNAME});
+                Set(peername=${CHANNEL(peername)});
+                Set(peer=${FILTER(0-9,${peername})});
+                &get-PEERINFO(${peer});
+		&change-TRANSFERTO(${EXTEN:3},${peername});
+		Hangup();
+	};
+
+        _*73 => {
+                CUSTOMERSNAME=${CONTEXT:4};
+                &get-BASICVARS(${CUSTOMERSNAME});
+                Set(peername=${CHANNEL(peername)});
+                peer=${FILTER(0-9,${peername})};
+                &get-PEERINFO(${peer});
+                &change-TRANSFERTO(0,${peername});
+                Hangup();
+        };
+
+        _[1234][0-9]X => {
+                ivr:
+		CUSTOMERSNAME=${CONTEXT:4};
+                &get-BASICVARS(${CUSTOMERSNAME});
+                Set(peername=${CHANNEL(peername)});
+		Set(peer=${FILTER(0-9,${peername})});
+		Set(CDR(peerdialingout)=${peer});
+
+		// check calling peer
+		if(${LEN(${${CUSTOMERSNAME}-isIncomingCall})}==0){
+			if(${LEN(${peer})}<3){
+				&send-email(account ${CUSTOMERSNAME} has invalid peer ${peername} calling ${EXTEN} , ${MAINSERVER});
+				Hangup();
+	                }
+			else{
+				// check caller peer
+				&get-PEERINFO(${peer});
+			}
+		}else{
+			SIPAddHeader(Alert-Info:Office);
+		}
+		// now check peer to be called
+		&get-PEERINFO(${EXTEN});
+                Set(CDR(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+                Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+                Set(CDR(server)=${SYSTEMNAME});
+                Set(CDR(destination)=${EXTEN});
+		Set(CDR(rateProvider)=internal);
+		Set(CHANNEL(parkinglot)=${CUSTOMERSNAME}_parkinglot);
+		if(${LEN(${FROM_DB_TRANSFERTO})}>1){
+			jump ${FROM_DB_TRANSFERTO};
+		}
+
+                if(${LEN(${ringtime})}=0){ringtime=30;}
+
+		// test peer it could be off-line or a IAX 
+		if("${FROM_DB_ISSIP}"="yes" || "${FROM_DB_ISSIP}"="1"){
+			// SIP PEER
+			noop(PEER IS SIP);
+			Set(status=${DEVICE_STATE(SIP/${CUSTOMERSNAME}${EXTEN})});
+		}
+		else{
+			// IAX PEER
+			noop(PEER IS IAX);
+			Set(status=${DEVICE_STATE(IAX2/${CUSTOMERSNAME}${EXTEN})});
+		}
+		SIPAddHeader(Alert-Info:Office);
+		&record(0);
+		if("${status}"!="UNAVAILABLE" && "${status}"!="INVALID"){
+			if("${FROM_DB_ISSIP}"="yes" || "${FROM_DB_ISSIP}"="1"){
+				noop(${CUSTOMERSNAME} is dialing an extension ***************************);
+				if("${CUSTOMERSNAME}"!="CREATIVEDESIGN"){
+					Dial(SIP/${CUSTOMERSNAME}${EXTEN},${FROM_DB_EXTENRINGTIME},TtK);
+				}else{
+					// CREATIVE wants MOH when dialing in
+					Dial(SIP/${CUSTOMERSNAME}${EXTEN},55,${IF("${DB_PLAYMUSICTRANSFER}"=="1"?m(${CUSTOMERSNAME}_${CHANNEL(language)})):r}TtKk);
+				}
+			}else{
+				// Is IAX
+				noop(${CUSTOMERSNAME} is dialing out ***************************);
+				Dial(IAX2/${CUSTOMERSNAME}${EXTEN},${FROM_DB_EXTENRINGTIME},TtK);
+			}
+		}
+		else if("${status}"=="UNAVAILABLE") {
+                        if("${comebackTodispatcher}"="yes"){
+				noop( back to dispacher from extention );
+                                return;
+                        }
+
+			if("${DIALSTATUS}"="BUSY"){
+				&do-VM(${EXTEN},b);
+			}else{
+				&do-VM(${EXTEN},u);
+			}
+		}
+		else{
+			noop(STATUS=${status}  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!);
+			Playtones(congestion);
+                        Playtones(congestion);
+                        Hangup();
+		}
+
+	        if("${comebackTodispatcher}"="yes"){noop( back to dispacher from extention );return;}
+                if("${DIALSTATUS}"="CHANUNAVAIL"
+                        || "${DIALSTATUS}"="NOANSWER"
+                        || "${DIALSTATUS}"="CONGESTION"
+			|| "${DIALSTATUS}"="UNAVAILABLE"){
+
+			&do-VM(${EXTEN},u);
+                }
+                else  if("${DIALSTATUS}"="BUSY"){
+				&do-VM(${EXTEN},b);
+			}
+                if("${VMSTATUS}"="FAILED"){Playback(vm-mailboxfull);}
+                Hangup();		
+        };
+
+        _1NXXNXXXXXX => {
+                exten=${EXTEN:-10};
+                jump ${exten};
+        };
+
+        _[2-9]XXXXXXXXX => {
+                CUSTOMERSNAME=${CONTEXT:4};
+	        if("${{CUSTOMERSNAME}-isIncomingCall}"!="yes"){
+			&get-BASICVARS(${CUSTOMERSNAME});
+		}
+
+                Set(peername=${CHANNEL(peername)});
+		Set(peer=${FILTER(0-9,${peername})});
+
+		if(${LEN(${${CUSTOMERSNAME}-isIncomingCall})}==0){
+			// Not an incoming call
+			if(${LEN(${peer})}>0){
+				&get-PEERINFO(${peer});
+				Set(CDR(peerdialingout)=${peer});
+			}
+			Set(CDR(peeranswered)=${EXTEN});
+		}
+		else{
+			Set(CDR(peeranswered)=${EXTEN});
+		}
+
+                Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+                Set(CDR(server)=${SYSTEMNAME});
+                Set(CDR(destination)=${EXTEN});
+		Set(CDR(peerdialingout)=${peername});
+                Set(numberToRate=1${EXTEN});
+                &get-ISCONGESTION(${EXTEN});
+                Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+		Set(CHANNEL(parkinglot)=${CUSTOMERSNAME}_parkinglot);
+
+		if(${LEN(${rate})}==0 || "rate"=="-1000" || "rate"=="-1001" || "rate"=="-1002"){
+			Set(rate=--0.1);
+		}
+
+		ringtime=54;
+
+		if(${LEN(${RINGTIME_FROM_DB_RINGTIME})}>0)
+		{
+			ringtime=${RINGTIME_FROM_DB_RINGTIME};
+		}
+
+                if("${DB_PLAYMUSICONTRANSFER}"="1")
+                {
+                        Playback(transfering);
+                        Set(PLAYMUSICONTRANSFER=m(${CUSTOMERSNAME}_${CHANNEL(language)}));
+                }
+
+		noop($$$$$$$$$$$$$$$   ORIGINAL CALLERID  ${CALLERID(num)}   $$$$$$$$$$$$$$$$$$$$$$$$$$);
+		noop(##################################  ${${CUSTOMERSNAME}-isIncomingCall});
+		noop(#################  MAIN CALLERID ${DB_MAINCALLERID});
+
+		if("${${CUSTOMERSNAME}-isIncomingCall}"="yes" && "${DB_PASSORIGINALCALLERID}"="1" && ${LEN(${FILTER(0-9,${CALLERID(num)})})} >= 10 ){			
+			Set(CALLERID(num)=1${CALLERID(num):-10});
+			//Set(CALLERID(name)=);  // Leave blanck due to T-Mobile pulling CNAM from "From Header"
+		}else{
+			&record(0);
+	                Set(result=${ODBC_GETCALLERIDNAME(${DB_MAINCALLERID})});
+			if(${LEN(${result})}>0){
+                                Set(CALLERIDNAME=${CUT(result,\,,1)});
+				Set(CALLERID(name)=${CALLERIDNAME});				
+			}
+			// change callerid
+			Set(CALLERID(num)=1${DB_MAINCALLERID});
+			if(${LEN(${peer})}>=3)
+			{
+				// Set a specific callerid when an extension is dialing out
+				if(${LEN(${FROM_DB_DIALOUTCALLERID})}>=10)
+				{
+					// the caller id will be changed
+					Set(CALLERID(num)=${FROM_DB_DIALOUTCALLERID});
+				}
+	                }
+		}
+ 
+		&get-ISINTERNAL-PHONE(${EXTEN});  // should populate FROM_DB_EXTENSION and FROM_DB_CONTEXT
+		Set(CHANNEL(parkinglot)=${CUSTOMERSNAME}_parkinglot);
+
+		Set(CALLERID(num)=1${CALLERID(num):-10});
+		Set(rateProvider=${DB_DIALPROV1});
+		noop(${CUSTOMERSNAME} is dialing out ***************************);
+
+		// Modular Dial attempts
+		&try-dial(${DB_DIALPROV1}, ${EXTEN}, ${ringtime});
+
+		if ("${DIALSTATUS}" != "NOANSWER") {
+			Set(rateProvider=${DB_DIALPROV2});
+			&try-dial(${DB_DIALPROV2}, ${EXTEN}, ${ringtime});
+		}
+		if ("${DIALSTATUS}" != "NOANSWER") {
+			Set(rateProvider=${DB_DIALPROV3});
+			&try-dial(${DB_DIALPROV3}, ${EXTEN}, ${ringtime});
+		}
+
+		if("${comebackTodispatcher}"="yes")
+                {
+			noop(  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Back to dispacher ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^);
+                        return;
+                }
+
+                Hangup();
+        };
+
+	TollFree => {
+                CUSTOMERSNAME=${CONTEXT:4};
+		Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+		Set(peername=${CHANNEL(peername)});
+                Set(peer=${FILTER(0-9,${peername})});
+		Set(CDR(peerdialingout)=${peer});
+
+		&get-PEERINFO(${peer});
+
+                Set(numberToRate=${tollfree});
+                Set(CDR(peeranswered)=${tollfree});
+
+		&get-BASICVARS(${CUSTOMERSNAME});
+
+                Set(CDR(server)=${SYSTEMNAME});
+                &get-ISCONGESTION(${tollfree:-10});
+                Set(TIMEOUT(absolute)=8000);
+		&get-ISINTERNAL-PHONE(${tollfree:-10});  // should populate FROM_DB_EXTENSION and FROM_DB_CONTEXT
+                Set(CALLERID(num)=${DB_MAINCALLERID});
+                Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+                Set(CDR(destination)=${tollfree});
+                1880_callerid=${DB_MAINCALLERID};
+
+		&record(0);
+
+		Set(CHANNEL(parkinglot)=${CUSTOMERSNAME}_parkinglot);
+                &dial-Toll-Free(${tollfree},${1880_callerid});
+                Hangup();
+	};
+
+        _800NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _833NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _844NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _855NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _866NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _877NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _888NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _1855NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _1866NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _1877NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+
+        _1888NXXXXXX => {
+                Set(tollfree=${EXTEN});
+                jump TollFree;
+        };
+/*
+	_011550800ZXXXXXX => {
+                CUSTOMERSNAME=${CONTEXT:4};
+                Set(peername=${CHANNEL(peername)});
+                Set(peer=${FILTER(0-9,${peername})});
+		&dialBrazil(${EXTEN},${CUSTOMERSNAME});
+		Hangup();
+	};
+*/
+        _011550300ZXXXXXX => {
+                CUSTOMERSNAME=${CONTEXT:4};
+                Set(peername=${CHANNEL(peername)});
+                Set(peer=${FILTER(0-9,${peername})});
+                &dialBrazil(${EXTEN},${CUSTOMERSNAME});
+                Hangup();
+        };
+
+
+        _01155ZX[789]XXXXXXX! => {
+		CUSTOMERSNAME=${CONTEXT:4};
+		Set(peer=${FILTER(0-9,${peername})});
+		if("${CUSTOMERSNAME}"=="LOWTAX"){
+			if("${peer}"==""){
+				
+			}
+		}
+		&dialBrazil(${EXTEN},${CUSTOMERSNAME});
+                Hangup();
+        };
+
+        _01155ZXNXXXXXXX => {
+		// BRAZIL
+                CUSTOMERSNAME=${CONTEXT:4};
+                &dialBrazil(${EXTEN},${CUSTOMERSNAME});
+                Hangup();
+	};
+
+        _011550800XXXXXXX => {
+                // BRAZIL
+                CUSTOMERSNAME=${CONTEXT:4};
+                &dialBrazil(${EXTEN},${CUSTOMERSNAME});
+                Hangup();
+        };
+
+        _01155[34]00[34]XXXX => {
+                // BRAZIL
+                CUSTOMERSNAME=${CONTEXT:4};
+                &dialBrazil(${EXTEN},${CUSTOMERSNAME});
+                Hangup();
+        };
+
+        _011ZXXX. => {
+		Set(ext=${FILTER(0-9,${EXTEN})});
+		if(${LEN(${ext})}>15 || ${LEN(${ext})}!=${LEN(${EXTEN})}  ){
+			log(WARNING,Extension is too long or has non numerics !!!!!!!!!!!);
+			Playtones(congestion);Playtones(congestion);wait(3);
+			Hangup();
+		}
+		if(${LEN(${EXTEN})}<12)
+		{
+			Playtones(congestion);
+                        Hangup();
+		}
+                Set(peername=${CHANNEL(peername)});
+                Set(peer=${FILTER(0-9,${peername})});
+
+                CUSTOMERSNAME=${CONTEXT:4};
+                Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+                Set(CDR(server)=${SYSTEMNAME});
+                Set(CDR(destination)=${EXTEN});
+                Set(numberToRate=${EXTEN});
+
+                &get-BASICVARS(${CUSTOMERSNAME});
+                &get-PEERINFO(${peer});
+                if("${FROM_DB_PEERACTIVE}"="0"){
+                        Playtones(congestion);
+                        Hangup();
+                }
+		Set(CALLERID(num)=${DB_MAINCALLERID});
+		&get-ISALLOWEDCOUNTRY(${EXTEN});
+                &get-ISCONGESTION(${EXTEN});
+                Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+                Set(TIMEOUT(absolute)=3600);
+                Set(CHANNEL(parkinglot)=${CUSTOMERSNAME}_parkinglot);
+		&record(0);
+
+                Set(CDR(peerdialingout=${peer}));
+
+		noop(${CUSTOMERSNAME} is dialing out ***************************);
+                if("${DB_INTERPROVIDER1}"=="anveo"){
+                        Dial(SIP/0INTER${EXTEN}@sbc.anveo.com,40,KT);
+                }
+                else if("${DB_INTERPROVIDER1}"=="voipinnovations")
+                {
+                        Set(rateProvider=${DB_INTERPROVIDER1});Dial(SIP/${EXTEN}@voipinnovations,40,KT);
+                }
+                else if("${DB_INTERPROVIDER1}"=="voipms"){
+                        Set(rateProvider=voipms);Dial(SIP/033${EXTEN:3}@voipms,40,KT);
+                }
+
+		noop(${CUSTOMERSNAME} is dialing out ***************************);
+                if("${DB_INTERPROVIDER2}"=="anveo"){
+                        Dial(SIP/0INTER${EXTEN}@sbc.anveo.com,40,KT);
+                }
+		else if("${DB_INTERPROVIDER2}"=="voipinnovations")
+                {
+                        Set(rateProvider=${DB_INTERPROVIDER2});Dial(SIP/${EXTEN}@voipinnovations,40,KT);
+                }
+                else if("${DB_INTERPROVIDER2}"=="voipms")
+                {
+                        Set(rateProvider=voipms);Dial(SIP/033${EXTEN:3}@voipms,40,KT);
+                }
+
+                if("${DB_INTERPROVIDER3}"=="anveo"){
+                        Dial(SIP/0INTER${EXTEN}@sbc.anveo.com,40,KT);
+                }
+                else if("${DB_INTERPROVIDER3}"=="voipinnovations")
+                {
+                        Set(rateProvider=${DB_INTERPROVIDER3});Dial(SIP/${EXTEN}@voipinnovations,40,KT);
+                }
+                else if("${DB_INTERPROVIDER3}"=="voipms")
+                {
+                        Set(rateProvider=voipms);Dial(SIP/033${EXTEN:3}@voipms,40,KT);
+                }
+
+                Set(rateProvider=voipms);Dial(SIP/${EXTEN}@voipinnovations,30,KT);
+                Set(rateProvider=voipms);Dial(SIP/033${EXTEN:3}@voipms,20,KT);
+                Hangup();
+        };
+
+        _X. => {
+		NoCDR();
+                Playback(invalid);
+                Hangup();
+        };
+
+        t => {
+//                &send-email(${CUSTOMERSNAME} ${message},time-out);
+
+        };
+
+        T => {
+		CUSTOMERSNAME=${CONTEXT:4};
+                &send-email(${message},CUSTOMER=${CUSTOMERSNAME} Absolute time-out);
+        };
+
+        _ => {
+                log(warning,Received call for unknown extension: ${EXTEN});
+                Playback(sorry-cant-service);
+                Hangup();
+        };
+
+};
+
+macro try-dial(provider, exten, ringtime) {
+	Set(provider=${FILTER(0-9a-zA-Z,_-,${provider})});
+	Set(exten=${FILTER(0-9,${exten})});
+	Set(ringtime=${FILTER(0-9,${ringtime})});
+
+	NoOp(Normalized exten='${exten}' ringtime='${ringtime}');
+    
+	if("${provider}" == "anveo") {
+		Dial(SIP/0EDILS1${exten}@sbc.anveo.com,${ringtime},KTt);
+	} else if("${provider}" == "voipinnovations") {
+		Dial(SIP/1${exten}@voipinnovations,${ringtime},KTtr);
+	} else if("${provider}" == "voipms") {
+		Dial(SIP/1${exten}@voipms,${ringtime},KTtr);
+	} else if("${provider}" == "bulkvs") {
+		Dial(SIP/1${exten}@bulkvs,${ringtime},KTtr);
+	}
+	return;
+};
+
+macro dial-Toll-Free(1800number,callerid){
+	Set(CALLERID(num)=${callerid});
+        Set(numberToRate=${1800number});
+
+        Set(peername=${CHANNEL(peername)});
+        Set(peer=${FILTER(0-9,${peername})});
+        Set(CDR(peerdialingout=${peer}));
+
+	Set(__rateProvider=bulkvs);
+	Set(CDR(rateProvider)=${rateProvider});
+	Dial(SIP/${1800number}@${rateProvider},35,KTr);
+	Set(__rateProvider=voipinnovations);
+	Set(CDR(rateProvider)=${rateProvider});
+        Dial(SIP/${1800number}@${rateProvider},35,KTr);
+	Set(__rateProvider=voipms);
+	Set(CDR(rateProvider)=${rateProvider});
+        Dial(SIP/${1800number}@${rateProvider},35,KTr);
+        return;
+};
+
+macro do-hangup(){
+	Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+	Set(TEMPchannel=${CHANNEL:4});
+        Set(CDR(server)=${SYSTEMNAME});
+        Set(CDR(mobilerate)=${DB_MOBILERATE});
+        Set(callduration=${CDR(billsec)});
+        Set(totalCost=0);
+        if(${LEN(${rate})}!=0){rate=${rate};}else{rate=0;}
+	Set(CDR(rate)=${rate});
+	Set(CDR(rateProvider)=${rateProvider});
+	Set(CDR(answeredtime)=${ANSWEREDTIME});		
+	Set(lang=${CHANNEL(language)});
+	if(${LEN(${queuename})}>0){
+		if(${QUEUE_EXISTS(${queuename})}){
+			if("${ABANDONED}"!="TRUE"){
+				//Set(Queue_date=${STRFTIME(${EPOCH}, ,%Y-%m-%d %T)});
+				if(${LEN(${AGENT})}>0){
+					QueueLog(${queuename},${UNIQUEID},${AGENT},COMPLETECALLER,99|${CDR(billsec)}|98|97);
+				}else{
+					QueueLog(${queuename},${UNIQUEID},NONE,COMPLETECALLER,99|${CDR(billsec)}|98|97);
+				}
+			}
+		}  
+	}
+        if("${${CUSTOMERSNAME}-isIncomingCall}"=="yes"){
+		Set(channel=${CDR(dstchannel)});
+		Set(channelcutVar=${CUT(channel,\-,1)});
+		Set(separatorCount=${FIELDQTY(channelcutVar,/)});
+		Set(channelVar=);
+		if(${separatorCount}==2){
+			// Remove "SIP/" from channel name 
+			channelVar=${CUT(channelcutVar,/,2)};
+			Set(channelHasAccountcode=${REGEX("${CUSTOMERSNAME}" ${channelVar})});
+			if(${channelHasAccountcode}==1){
+				// size looks like an extension 3 or 4
+				noop(channelVar=${channelVar});
+				// channel name has accountcode
+				channelVar=${STRREPLACE(channelVar,${CUSTOMERSNAME},,)};
+				Set(CDR(peeranswered)=${channelVar});
+			}
+		}
+		if(${LEN(${CDR(peeranswered)})}==0 || "${CDR(peeranswered)}"=="system" || "${CDR(peeranswered)}"=="outgoing"){
+			// peeranswered hasn't been set yet
+	                Set(containsACCOUNTCODE=${REGEX("${CUSTOMERSNAME}" ${DIALEDPEERNUMBER})});
+			if("${containsACCOUNTCODE}"=="1"){
+                                // has accountcode in the name, meaning it's an internal peer
+				Set(peerAccountNameSize=${LEN(${CUSTOMERSNAME})});
+				Set(peerNumber=${DIALEDPEERNUMBER:${peerAccountNameSize}});
+				Set(CDR(peeranswered)=EX${peerNumber});
+			}
+			else{
+				if(${LEN(${DIALEDPEERNUMBER})}==0){
+					if(${LEN(${resultVM})}>=3){
+						Set(CDR(peeranswered)=VM-${resultVM});
+					}else{
+						Set(CDR(peeranswered)=IVR);
+					}
+				}
+				else{
+					// it's forwarded call, since it's an incoming call with an extenal peername
+					// get the phone number out of the peer name
+					Set(peerNumber=${CUT(DIALEDPEERNUMBER,@,1)});
+					Set(CDR(peeranswered)=DD${peerNumber});
+				}
+			}
+		}
+	}
+
+        if("${CDR(userfield)}"="MOBILE"){rate=${DB_MOBILERATE};}
+	Set(totalMinutes=${MATH(${callduration}/60,int)});      // Gets only the minutes  (int removes all decimal no rounding)
+        Set(totalSeconds=${MATH(${callduration}%60,int)});      // Gets only remiander the seconds
+        if(${LEN(${totalMinutes})}>0){
+		if(${LEN(${totalSeconds})}>0){
+			if(${totalSeconds}>0){
+				totalMinutes=${MATH(${totalMinutes}+1,int)};
+                                Set(totalCost=${MATH(${totalMinutes}*${rate})});
+                        }
+                }
+		Set(CDR(rateCallcost)=${totalCost});
+                if(${LEN(${international_groupcount})}>0){
+                        deletegroup=${DB_DELETE(${GROUPNAME}/${international_groupcount})};
+                }
+                if(${LEN(${local_groupcount})}>0){
+                        ss=${DB_DELETE(${CUSTOMERSNAME}_local/${local_groupcount})};
+                }
+	}
+	noop(Account ${CUSTOMERSNAME} is hanging up.);
+	Hangup();
+	return;
+};
+
+macro make_dial_string(CUSTOMERSNAME, ring_time, whatToPlayOnTransfer) {
+	// Validate CUSTOMERSNAME
+    if (${LEN(${CUSTOMERSNAME})} = 0) {
+        NoOp(WARNING: CUSTOMERSNAME is empty! Cannot proceed with dial string);
+        Set(full_dial_string=);
+        Return();
+    }
+
+    // Build base dial group
+    Set(dial_target=${DIALGROUP(${CUSTOMERSNAME})});
+    if (${LEN(${dial_target})} = 0) {
+        NoOp(WARNING: dial_target for ${CUSTOMERSNAME} is empty! Aborting dial string);
+        Set(full_dial_string=);
+        Return();
+    }
+
+    // Validate ring_time
+    if (${LEN(${TRIM(${ring_time})})} = 0) {
+        NoOp(WARNING: Ring time not provided, using default 20s);
+        Set(ring_time=20);
+    }
+
+    // Normalize whatToPlayOnTransfer
+    if ("${whatToPlayOnTransfer}" != "1" & "${whatToPlayOnTransfer}" != "0") {
+        NoOp(WARNING: Unexpected whatToPlayOnTransfer value '${whatToPlayOnTransfer}', assuming disabled);
+        Set(whatToPlayOnTransfer=0);
+    }
+
+	Set(language=${CHANNEL(language)});
+
+	// Build dial options
+	Set(dial_options=${IF($["${whatToPlayOnTransfer}" = "1"]?m(${CUSTOMERSNAME}_${language}):r)}TtKk);
+
+	// Final dial string
+	noop(dial_target=${dial_target});
+	noop(ring_time=${ring_time});
+	noop(dial_options=${dial_options});
+	Set(full_dial_string=${dial_target},${ring_time},${dial_options});
+
+    return;
+}

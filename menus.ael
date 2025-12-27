@@ -1,0 +1,616 @@
+macro do-CUSTOM-MENU(){
+        if("${attempt}"==""){
+                Set(attempt=0);
+        }
+        &do-MENU(${attempt},0,0);
+        &dispatcher(${attempt});
+        return;
+}
+
+macro do-MENU(attempt, gotoHoliday, goToIVR_Options){
+	if(${gotoHoliday}=0){
+		if("${attempt}"==""){
+			Set(attempt=1);
+		}
+
+		Set(CALLERPEERNAME=${CHANNEL(peername)});
+		Set(ISINTERNAL=${REGEX("^${CUSTOMERSNAME}" ${CALLERPEERNAME})});
+
+		if("${ISINTERNAL}"=="1"){
+			// has accountcode in the name, meaning it's an internal peer, get main number
+			&get-BASICVARS(${CUSTOMERSNAME});
+			if(${LEN(${DB_DID})}==0){
+				&get-DID_DATA(${Var_TO});
+			}
+		}
+	}else if(${get_IVR_Options}=1){
+		goto get_IVR_Options;
+	}
+
+        holiday:
+
+        if("${holiday}"=="natal" || "${holiday}"=="newyear" || "${holiday}"=="memorial"){
+                if("${DB_PLAYHOLIDAYGREETING}"=="1" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+                        // if play greeting and time off play all together
+                        if("${holiday}"=="memorial")
+                                Playback(holiday);
+                        else
+                                Playback(christimasAndOffHours);
+                }
+                else if("${DB_PLAYHOLIDAYGREETING}"=="1"){
+                        Playback(${CUSTOMERSNAME}/christimas);
+                }
+                else if("${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+                        Playback(EndOfYearHolidaysOffHours);
+                }
+	}
+
+        get_IVR_Options:
+	Set(menuoption=0);
+
+	language = ${CHANNEL(language)};
+	Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${language});
+
+	if(${LEN(${PROFILE_NAME})}==0){
+		//  Play greeting because it has no Profile
+		&do-MENU-NO-PROFILE();
+        }
+	else if(${LEN(${PROFILE_NAME})}>1){
+		Set(LOCAL(menuresult)=${ODBC_GETDIDMENU(${CUSTOMERSNAME},${Var_TO},${goToIVR_Options},${attempt})});
+		if(${ODBCROWS}==0){
+			log(warning, COULDN'T get menu);
+			return;
+		}
+
+		Set(Increment=0);
+		Set(DB_MENU_AUDIOFILE_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_AUDIOFILE_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_AUDIOFILE_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_ENABLED=${CUT(menuresult,\,,${INC(Increment)})});
+//		Set(DB_MENU_IS_LANGUAGESELECTOR=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_PLAY_MENU_GREETING=${CUT(menuresult,\,,${INC(Increment)})});
+
+		Set(DB_MENU_NAME_1st=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_NAME_2nd=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_NAME_3rd=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_LANGUAGES_AVAILABLE=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_LANGUAGEOPTION_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_LANGUAGEOPTION_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_LANGUAGEOPTION_pt=${CUT(menuresult,\,,${INC(Increment)})});
+
+		changeLanguage:
+		language = ${CHANNEL(language)};
+
+		if("${PROFILE_PLAYPRIVACY}"=="1")Playback(monitorrecorded);
+
+		if("${Profile_FWD${attempt}}"=="hg" || "${Profile_FWD${attempt}}"=="-"){
+			// Hangup here to avoid further processing
+			Hangup();
+		}
+
+		if("${DB_MENU_PLAY_MENU_GREETING}"=="1"){
+			&get-audio(${CUSTOMERSNAME},${DB_MENU_AUDIOFILE_${language}});
+			if(${LEN(${ATENDEDOR_FILENAME})}==0){
+				log(warning, Playatendedor is true but no file available for account ${CUSTOMERSNAME} profile: ${PROFILE_NAME});
+				return;
+			}
+			Read(menuoption,${language}/${CUSTOMERSNAME}/${ATENDEDOR_FILENAME},4,,1,2);
+
+			menuoption=${FILTER(0-9,${menuoption})}; // Make sure it's a number.
+
+/*
+			if(${LEN(${menuoption})}>0){
+				if("${DB_MENU_IS_LANGUAGESELECTOR}"=="1"){
+					// Select a laguage
+					languagesCount=${FIELDQTY(DB_MENU_LANGUAGES_AVAILABLE,\;)};  // Languages count
+					if(${LEN(${languagesCount})}>0){
+						for(x=1;${x}<=${languagesCount};x=${x}+1){
+							Set(newLanguage=${CUT(DB_MENU_LANGUAGES_AVAILABLE,;,${x})});
+							if("${menuoption}"="${DB_MENU_LANGUAGEOPTION_${newLanguage}}"){
+								if("${CHANNEL(language)}"!="${newLanguage}"){
+									language=${newLanguage};
+									Set(CHANNEL(language)=${newLanguage});
+									goto changeLanguage;
+								}else{
+									log(warning,Laguage already selected);
+								}
+							}
+						}
+					}
+				}
+			}
+*/
+
+		}
+	}
+
+        if(${LEN(${menuoption})}==0){
+                menuoption=0;
+        }
+
+	Set(LOCAL(DB_MENU_NAME)="");
+
+	if ("${attempt}"=="1"){
+		noop(Attempt1= ${attempt});
+		DB_MENU_NAME=${DB_MENU_NAME_1st};
+	}else if("${attempt}"=="2"){
+		noop(Attempt2= ${attempt});
+		DB_MENU_NAME=${DB_MENU_NAME_2nd};
+	}else if("${attempt}"=="3"){
+		noop(Attempt3= ${attempt});
+		DB_MENU_NAME=${DB_MENU_NAME_3rd};
+	}else{
+		log(warning, Only 3 attempts allowed. ##############################################################);
+		Hangup();
+	}
+
+	if(${LEN(${menuoption})}==1 && ${REGEX("[0-9]" ${menuoption})}=1)
+	{
+		&do-MENUOPTION(${DB_MENU_NAME},${menuoption},${attempt});
+	}
+	else if("${menuoption}"="*"){&changeAfterhoursOverride();}
+	else if("${menuoption}"="**"){&RequestToDialOut();}
+	else if(${LEN(${menuoption})}==3 || ${LEN(${menuoption})}==4){
+		log(warning, caller knows the extension option=${menuoption});
+		if(${REGEX("[123][0-5][0-9]" ${menuoption})}=1){
+			Set(comebackTodispatcher=no);
+			if(${DEVICE_STATE(SIP/${CUSTOMERSNAME}${menuoption})}==UNAVAILABLE){
+				Playback(extension);SayNumber(${menuoption});Playback(${ASTDATADIR}/sounds/${language}/silence/1);  // Plays silence for 1 second;
+				Playback(is-curntly-unavail);
+				Set(menuoption=);
+				goto ${EXTEN},get_IVR_Options;
+			}else{
+				Dial(local/${menuoption}@ivr-${CUSTOMERSNAME},15,r);
+				Set(menuoption=);
+				goto ${EXTEN},get_IVR_Options;
+			}
+		}else{
+			//  got here because failed all selections! so go back to the begining.
+			Set(menuoption=);
+			goto ${EXTEN},get_IVR_Options;
+		}
+	}
+       return;
+};
+
+macro do-MENU-NO-PROFILE(){
+	if("${DB_PLAYGREETING}"="1"){
+		Set(LOCAL(ATENDEDOR_DIRECTORY)=${CUSTOMERSNAME});
+                Set(LOCAL(ATENDEDOR_FILENAME)=atendedor);
+
+                Set(LOCAL(ATENDEDOR_MD5HASH)=);
+
+                Set(result=${ODBC_GETATENDEDOR_FILE(${CUSTOMERSNAME},${Var_TO:-10})});
+                if(${ODBCROWS} == 1){
+                        Set(LOCAL(ATENDEDOR_DBFILENAME)=${CUT(result,\,,1)});
+                        Set(LOCAL(ATENDEDOR_DBFOLDER)=${CUT(result,\,,2)});
+                        Set(LOCAL(ATENDEDOR_MD5HASH)=${CUT(result,\,,5)});
+
+                        if(${LEN(${ATENDEDOR_DBFOLDER})}>0){
+                                if("${TOLOWER(${ATENDEDOR_DBFOLDER})}" != "default"){
+                                        ATENDEDOR_DIRECTORY=${CUSTOMERSNAME}/${ATENDEDOR_DBFOLDER};
+                                }else{
+                                        ATENDEDOR_DIRECTORY=${CUSTOMERSNAME};
+                                }
+                        }
+                        if(${LEN(${ATENDEDOR_DBFILENAME})}>0){
+                                if("${TOLOWER(${ATENDEDOR_DBFILENAME})}" != "default"){
+                                        ATENDEDOR_FILENAME=${ATENDEDOR_DBFILENAME};
+                                }
+                        }
+                }
+
+                &get-audio(${CUSTOMERSNAME},${ATENDEDOR_FILENAME});
+
+                Read(menuoption,${CUSTOMERSNAME}/${ATENDEDOR_FILENAME},4,,1,2);  //  max of 4 digits allows 1 attempts and timeout after 2 seconds
+
+		if("${DB_PLAYPRIVACY}"=="1")Playback(monitorrecorded);
+	}
+
+	&do-ATENDEDOR(${menuoption});
+	return;
+};
+
+macro do-MENUOPTION(menuname,option,attempt){
+	Set(validMenuOptionsResult=${ODBC_GEVALIDDMENUOPTIONS(${CUSTOMERSNAME},${DB_MENU_NAME})});
+	Set(optionIsValid=0);
+	if(${ODBCROWS}==0){
+		log(warning, NO OPTION FOR MENU ${DB_MENU_NAME} IN ACCOUNT ${CUSTOMERSNAME});
+		return;
+	}else if(${LEN(${validMenuOptionsResult})}>0){
+		for(x=0;${x}<${ODBCROWS};x=${x}+1){
+			RESULT=${ODBC_FETCH(${validMenuOptionsResult})};
+			if(${RESULT}==${option}){
+				Set(optionIsValid=1);
+				break;
+			}
+		}
+	}
+
+	if(${optionIsValid}==0){
+		log(warning,  attempt=${attempt});
+		&do-MENU(${attempt},0,1);
+	}
+
+        Set(newMenu=);
+        doSubmenu:
+        //  submenuname has value only when there is a submenu
+
+        Set(LOCAL(menuresult)=${ODBC_GETDIDMENUOPTION(${CUSTOMERSNAME},${Var_TO:-10},${menuoption},${submenuname},${attempt})});
+        if(${ODBCROWS}==0){    // No menu option in DB
+                optionFailed:
+                if(${LEN(${menuoption})}==0 || "${menuoption}"=="0"){
+                        // caller made no choice (timed out) or entered wrong amount of digits.  *********
+                        &do-ATENDEDOR(0);
+                }else{
+                        if(${LEN(${validmenuOptions})}==0){
+                                noop($$$$$$$$$$$$$$$$$$$$$$$$$$$   NO VALID MENU OPTION  $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$);
+                                Set(validmenuOptions=1);
+                        }
+
+                        Set(validmenuOptions=${REPLACE(validmenuOptions,\,,)});
+
+                        if(${REGEX("^[${validmenuOptions}]$" ${menuoption})}=1){
+                                log(warning,   option found between 1 and 5);
+                                &do-ATENDEDOR(${menuoption});
+                        }else{
+                                log(warning,  NOT A MENU OPTION  *****************************);
+                                if("${menuoption}"="*"){&changeAfterhoursOverride();}
+                                else if("${menuoption}"="**"){&RequestToDialOut();}
+                                else{
+                                        log(warning, caller knows the extension option: ${menuoption});
+                                        if(${REGEX("[123][0-5][0-9]" ${menuoption})}=1){
+                                                Set(comebackTodispatcher=no);
+                                                if(${DEVICE_STATE(SIP/${CUSTOMERSNAME}${menuoption})}==UNAVAILABLE){
+							Playback(extension);SayNumber(${menuoption});Playback(${ASTDATADIR}/sounds/${language}/silence/1);  // Plays silence for 1 second;
+							Playback(is-curntly-unavail);
+							Set(menuoption=);
+                                                        goto ${EXTEN},optionFailed;
+                                                }else{
+                                                        Dial(local/${menuoption}@ivr-${CUSTOMERSNAME},15,r);
+                                                        Set(menuoption=);
+                                                        goto ${EXTEN},optionFailed;
+                                                }
+                                        }
+                                        else{
+                                                //  got here because failed all selections! so go back to the begining.
+                                                Set(menuoption=);
+                                                goto ${EXTEN},optionFailed;
+                                        }
+                                }
+                        }
+                }
+        }else{
+                noop(Menu FOUND in DB);
+		startmenu:
+                if("${menuoption}"="*"){&changeAfterhoursOverride();}
+                //else if("${menuoption}"="**"){&RequestToDialOut();}
+
+		Set(Increment=0);
+
+		Set(DB_MENU_NAME=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_TYPE_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_TYPE_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_TYPE_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_AUDIOFILE_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_AUDIOFILE_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_AUDIOFILE_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_PLAYGREETING=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_GROUP_NAME_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_GROUP_NAME_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_GROUP_NAME_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RINGTIME_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RINGTIME_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RINGTIME_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_GROUP_NAME_FAILED_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_GROUP_NAME_FAILED_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_GROUP_NAME_FAILED_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RINGTIME_FAILED_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RINGTIME_FAILED_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RINGTIME_FAILED_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_QUEUENAME_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_QUEUENAME_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_QUEUENAME_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_EXTERNAL_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_EXTERNAL_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_RING_EXTERNAL_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_ISENABLED=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_MENUOPTION=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_QUEUE_TIMEOUT_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_QUEUE_TIMEOUT_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_QUEUE_TIMEOUT_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_PLAYMESSAGE_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_PLAYMESSAGE_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_PLAYMESSAGE_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_SUBMENU_en=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_SUBMENU_es=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_MENU_SUBMENU_pt=${CUT(menuresult,\,,${INC(Increment)})});
+		Set(DB_PLAYMUSICTRANSFER=${CUT(menuresult,\,,${INC(Increment)})});
+
+                if(${LEN(${newMenu})=0}){
+                        Set(newMenu=${DB_MENU_NAME});
+                }
+
+                if("${DB_MENU_TYPE_${language}}"=="x"){ // external number
+                        noop(menuType= ${DB_MENU_TYPE_${language}});
+                        if(${LEN(${DB_MENU_RING_EXTERNAL_${language}})}>=10){
+                                if(${LEN(${DB_MENU_RING_EXTERNAL_${language}})}=10){
+                                        jump ${DB_MENU_RING_EXTERNAL_${language}}@ivr-${CUSTOMERSNAME};
+                                }else if(${LEN(${DB_MENU_RING_EXTERNAL_${language}})}=21){
+                                        Set(LOCAL(phones)=${DB_MENU_RING_EXTERNAL_${language}});
+                                        Set(LOCAL(externalRing1)=${CUT(phones,\;,1)});
+                                        Set(LOCAL(externalRing2)=${CUT(phones,\;,2)});
+                                        Set(DIALGROUP(${CUSTOMERSNAME},add)=SIP/1${externalRing1}@${DB_DIALPROV1});
+                                        Set(DIALGROUP(${CUSTOMERSNAME},add)=SIP/1${externalRing2}@${DB_DIALPROV1});
+                                        Dial(${DIALGROUP(${CUSTOMERSNAME})},60,,Tr);
+                                }else{
+                                        log(Warning, Wrong amount of digits for external ring);
+                                }
+                                Hangup();
+                        }else{
+                                &send-email("Hanging up due to no DB_MENU_RING_EXTERNAL even though we have DB_MENU_TYPE_en=${DB_MENU_TYPE_en} account:${CUSTOMERSNAME} ",BAD MENU Ring external);
+                                Hangup();
+                        }
+                }else if("${DB_MENU_TYPE_en}"=="p"){  // play audio
+                        noop(menuType= ${DB_MENU_TYPE_${language}});
+                        Set(LOCAL(audiofile)=${DB_MENU_PLAYMESSAGE_${language}});
+                        &get-audio(${CUSTOMERSNAME},${audiofile});
+			// Set(menufileexists=${STAT(e,${ASTDATADIR}/sounds/${language}/${CUSTOMERSNAME}/${audiofile}.wav)});
+                        if(${LEN(${ATENDEDOR_FILENAME})}>1){
+                                Playback(${ASTDATADIR}/sounds/${language}/silence/1);  // Plays silence for 1 second
+                                Playback(${ASTDATADIR}/sounds/${language}/${CUSTOMERSNAME}/${ATENDEDOR_FILENAME});
+                                Playback(${ASTDATADIR}/sounds/${language}/silence/2);  // Plays silence for 2 second
+				&do-MENU(${attempt}, 0, 0);
+				//goto startmenu;
+                        }else{
+                                log(warning,Account ${CUSTOMERSNAME} doesn't have an audio for ${Var_TO});
+                                &send-email(MISSING AUDIO,MISSING AUDIO ${ATENDEDOR_FILENAME} MISSING AUDIO account ${CUSTOMERSNAME} menu option p for ${Var_TO});
+                        }
+                        //goto get_IVR_Options;
+                }else if("${DB_MENU_TYPE_en}"=="q"){    // QUEUE
+                        noop(menuType= ${DB_MENU_TYPE_${language}});
+                        if(${LEN(${DB_MENU_QUEUENAME_${language}})}>0){
+                                if(${QUEUE_EXISTS(${DB_MENU_QUEUENAME}_${language})}){
+                                        &do-MENUQUEUE(${DB_MENU_QUEUENAME}_${language});
+                                        // nobody picked up the call
+                                        if(${QUEUE_EXISTS(${DB_MENU_QUEUENAME}_${language}_Fail)}){
+                                                &do-MENUQUEUE(${DB_MENU_QUEUENAME}_${language}_Fail);
+                                                // nobody picked up the call
+                                        }else{
+                                                log(WARNING, QUEUE ${DB_MENU_QUEUENAME}_${language}_Fail DOENS'T EXIST);log(WARNING, QUEUE ${DB_MENU_QUEUENAME}_${language}_Fail DOENS'T EXIST);
+                                        }
+                                }else{
+                                        log(WARNING, QUEUE ${DB_MENU_QUEUENAME}_${language} DOENS'T EXIST);log(WARNING, QUEUE ${DB_MENU_QUEUENAME}_${language} DOENS'T EXIST);
+                                }
+                        }else{
+                                log(WARNING, QUEUE NAME is empty);log(WARNING, QUEUE NAME is empty);log(WARNING, QUEUE NAME is empty);
+                        }
+                        //Set(attempt=${MATH(${attempt}+1,i)});
+                        &dispatcher(${attempt});
+                }else if("${DB_MENU_TYPE_${language}}"=="g"){  // Ring group
+                        noop(menuType=${DB_MENU_TYPE_${language}});
+                        if(${LEN(${DB_MENU_RING_GROUP_NAME_${language}})}>0){
+                                // Get the group
+				Set(ringGroupName=${DB_MENU_RING_GROUP_NAME_${language}});
+                                Set(menuRingGroupResult=${ODBC_GETRING_GROUPS(${CUSTOMERSNAME},${ringGroupName})});
+                                if(${LEN(${menuRingGroupResult})}>=3 | ${LEN(${menuRingGroupResultFailed})}>=3){
+                                        &get-GROUPTODIAL(${menuRingGroupResult},0);
+					if(${LEN(${DIALGROUP(${CUSTOMERSNAME})})}>0){
+						Set(group=${DIALGROUP(${CUSTOMERSNAME})});
+						Set(groupRingTime=${DB_MENU_RINGTIME_${language}});
+						Set(groupMusic=${CUSTOMERSNAME}_${language});
+						// Set(whatToPlayOnTransfer=${IF($["${DB_PLAYMUSICTRANSFER}" = "1"]?m(${groupMusic}):r)});
+						&make_dial_string(${CUSTOMERSNAME},${groupRingTime},${DB_PLAYMUSICTRANSFER});
+						Dial(${full_dial_string});
+					}
+
+					// Nobody picked up.
+
+					Set(menuRingGroupResultFailed=${ODBC_GETRING_GROUPS(${CUSTOMERSNAME},${DB_MENU_RING_GROUP_NAME_FAILED_${language}})});					
+					if(${LEN(${menuRingGroupResultFailed})}>=3){
+						&get-GROUPTODIAL(${menuRingGroupResultFailed},0);
+						Set(groupRingTime=${DB_MENU_RINGTIME_FAILED_${language}}
+							//${DB_MENU_RING_GROUP_NAME_FAILED_${language}});
+						if(${LEN(${DIALGROUP(${CUSTOMERSNAME})})}>0){
+							&make_dial_string(${CUSTOMERSNAME},${groupRingTime},${DB_PLAYMUSICTRANSFER});
+							Dial(${full_dial_string});
+						}
+                                        }
+
+					&MENU_PROFILE_DISPATCH(${attempt});
+                                }else{log(warning,No 'menuRingGroupResult' ring group for ${CUSTOMERSNAME},${Var_TO:-10},${menuoption});}
+                        }else{
+                                log(warning,No ring group for ${CUSTOMERSNAME},${Var_TO:-10},${menuoption} );
+                                &send-email("No ring group for ${CUSTOMERSNAME} menutype=${DB_MENU_TYPE_en} account:${CUSTOMERSNAME} ",BAD MENU);
+                                &dispatcher(${attempt});
+                                Hangup();
+                        }
+                }else if("${DB_MENU_TYPE_language}"=="s"){  // Sub Menu
+                        if(${LEN(${DB_MENU_SUBMENU_${language}})}==0){
+                                log(warning,  No SUBMENU for ${CUSTOMERSNAME} menuoption=${menuoption});
+                                return;
+                        }
+                        submenuname=${DB_MENU_SUBMENU_${language}};
+
+                        if("${newMenu}"=="${submenuname}" || "${DB_MENU_NAME}"=="${submenuname}"){
+                                // Avoid loop
+                                log(warning, SUBMENU LOOP name=${DB_MENU_NAME});
+                                Hangup();
+                        }
+
+                        Set(newMenu=${submenuname});
+
+                        Hangup();
+
+                        goto doSubmenu;
+                }else if(${LEN(${DB_MENU_TYPE_en})}==0){
+                        // TEMP
+                        log(WARNING,Failed to find menutype LENGTH ZERO);
+                }else{
+                        log(WARNING,Failed to find menutype);
+                }
+
+                &dispatcher(${attempt});
+                Hangup();
+
+	}
+	return;
+}
+
+macro MENU_PROFILE_DISPATCH(attemptFWD){
+        Set(attempt=${attemptFWD});
+        Set(attempt=$[${attempt}+1]);
+
+        if(${LEN(${DB_FWD${attempt}})}==0 || ${LEN(${DB_ACCOUNT})}==0){
+                &send-email(no ForwardTo or accountcode on DB did=${DB_DID}, ${MAINSERVER});
+                Hangup();
+        }
+        Set(comebackTodispatcher=no);
+
+        // Execute schedule exception on the first attempt only
+        if(${attempt}==1 && ${LEN(${DB_FWD${attempt}})}>1 && "${DB_FWD${attempt}}"!="ra"){
+                &do-CHECKSCHEDULE_EXCEPTION();
+        }
+
+        Set(language=${CHANNEL(language)});
+
+        if("${Profile_FWD${attempt}}"=="mn"){
+                if(${LEN(${Profile_FWD2})}>1){
+                        // there is an option for FWD2
+                        Set(comebackTodispatcher=yes);
+                }
+                &do-FWD_TO_ENTRY_EXT();
+
+        }else if("${Profile_FWD${attempt}}"=="ph"){
+
+                local fwdtophone = ${LEN(${Profile_GOTOPHONE${attempt}})};	
+
+                if(${LEN(${Profile_GOTOPHONETIMEOUT${attempt}})}>0){
+                        if(${fwdtophone}==3 || ${fwdtophone}==4 || ${fwdtophone}>=10){
+                                if("${DB_ACCOUNT_ALLOW_SMS_OUT}"=="1"){
+                                        if(${fwdtophone}==10){
+                                                &DO-SENDSMS(${DB_FWDTOPHONE${attempt}},,1);
+                                        }
+                                }
+                                if("${Profile_GOTOPHONE_PLAYGREETING}"="1"){
+                                        fwdoption:
+
+                                        if(${ODBCROWS} == 1){
+                                                &get-audio(${CUSTOMERSNAME},${Profile_GOTOPHONE_${language}});
+                                                Read(option,${CUSTOMERSNAME}/${ATENDEDOR_FILENAME},3,,1,2);
+                                                if("${option}"="${DB_LANGUAGEOPTION_PT}"){Set(CHANNEL(language)=pt);Set(option=);goto fwdoption;}
+                                                else if("${option}"="${DB_LANGUAGEOPTION_ES}"){Set(CHANNEL(language)=es);Set(option=);goto fwdoption;}
+                                                Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+                                        }
+                                }
+                                if(${LEN(${Profile_GOTOPHONETIMEOUT${attempt}})}==0){
+                                        Set(Profile_GOTOPHONETIMEOUT${attempt}=60);
+                                }
+                                Set(RINGTIME_FROM_DB_RINGTIME=${Profile_GOTOPHONETIMEOUT${attempt}});
+                                &dialExtension(${Profile_GOTOPHONE${attempt}});
+				// &dialExternalNumbers(${Profile_GOTOPHONE${attempt}},${RINGTIME_FROM_DB_RINGTIME});
+                        }
+                }else if(${fwdtophone}==3 || ${fwdtophone}==4 || ${fwdtophone}>=10){
+                        if("${Profile_GOTOPHONE_PLAYGREETING}"="1"){
+                                forwardoption:
+                                Read(option,${CUSTOMERSNAME}/atendedor,1,,1,1);
+                                if("${option}"="${DB_LANGUAGEOPTION_PT}"){Set(CHANNEL(language)=pt);Set(option=);goto forwardoption;}
+                                else if("${option}"="${DB_LANGUAGEOPTION_ES}"){Set(CHANNEL(language)=es);Set(option=);goto forwardoption;}
+                                Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+                        }
+                        Set(RINGTIME_FROM_DB_RINGTIME=${Profile_GOTOPHONETIMEOUT${attempt}});
+                        &dialExtension(${Profile_GOTOPHONE${attempt}});
+                }
+                else{
+                        log(warning, Cannot resolve where to send this call. Account = ${CUSTOMERSNAME});
+                        send(Cannot resolve where to send this call. Account = ${CUSTOMERSNAME}, ${CUSTOMERSNAME});
+                }
+        }
+        else if("${Profile_FWD${attempt}}"="gr"){
+                //  Get Groups
+                for(x=1;${x}<=3;x=${x}+1){
+                        Set(LOCAL(getgroupresult)=${ODBC_GETRING_GROUPMEMBERS(${CUSTOMERSNAME},${Var_TO:-10},${x},${CHANNEL(language)})});
+                        if(${ODBCROWS}==0){
+                                // No group
+                                return;
+                        }
+                        Set(GR_MEMBERS01=${CUT(getgroupresult,\,,1)});
+                        Set(GR_RING_TO_01=${CUT(getgroupresult,\,,2)});
+                        Set(GR_AUDIO=${CUT(getgroupresult,\,,3)});
+                        Set(GR_PLAY_ATENDEDOR=${CUT(getgroupresult,\,,4)});
+                        Set(LOCAL(quantity)=${FIELDQTY(GR_MEMBERS01,\;)});
+                        if(${quantity}==0){
+                                return;
+                        }
+                        Set(DIALGROUP(${CUSTOMERSNAME}_FIRST)=);
+                        for(y=1;${y}<=${quantity};y=${y}+1){
+                                Set(ext=${CUT(GR_MEMBERS01,;,${y})});
+                                if(${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})}!=BUSY && ${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})}!=UNAVAILABLE && ${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})}!=UNKNOWN && ${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})}!=INVALID ){
+                                        Set(DIALGROUP(${CUSTOMERSNAME}_FIRST,add)=SIP/${CUSTOMERSNAME}${ext});
+                                }
+                        }
+
+                        if(${LEN(${DIALGROUP(${CUSTOMERSNAME}_FIRST)})}>0){
+                                if("${GR_PLAY_ATENDEDOR}"="1"){
+                                        &get-audio(${CUSTOMERSNAME},${GR_AUDIO});
+					Read(option,${CUSTOMERSNAME}/${ATENDEDOR_FILENAME},3,,1,2);
+                                }
+                                if(${LEN(${DIALGROUP(${CUSTOMERSNAME}_FIRST)})}>=3){
+                                        Dial(${DIALGROUP(${CUSTOMERSNAME}_FIRST)},${GR_RING_TO_01},${IF("${DB_PLAYMUSICTRANSFER}"=="1"?m(${CUSTOMERSNAME}_${CHANNEL(language)})):r}TtKk);
+                                        noop(No answer for DIALGROUP  ${DIALGROUP(${CUSTOMERSNAME}_FIRST)});
+                                }
+                        }
+
+                }
+
+        }else if("${Profile_FWD${attempt}}"="ra"){
+                log(warning, RA);
+                // Request Access
+                &RequestToDialOut();
+        }
+        else if("${Profile_FWD${attempt}}"="vm"){
+                log(warning, VM);
+                VMmenulanguageoption:
+                // Do we need to play a file before VM?
+                Set(LOCAL(result)=${ODBC_GETATENDEDOR_FILE(${CUSTOMERSNAME},${Var_TO:-10})});
+                if(${ODBCROWS} == 1){
+                        Set(ATENDEDOR_DBFILENAME=${CUT(result,\,,1)});
+                        Set(ATENDEDOR_DBFOLDER=${CUT(result,\,,2)});
+                        Set(ATENDEDOR_PLAYATENDEDOR_FOR_VM=${CUT(result,\,,3)});
+                        if("${ATENDEDOR_PLAYATENDEDOR_FOR_VM}"=="1"){
+                                if(${LEN(${ATENDEDOR_DBFOLDER})}>0){
+                                        if("${TOLOWER(${ATENDEDOR_DBFOLDER})}" != "default"){
+                                                Set(ATENDEDOR_DIRECTORY=${ATENDEDOR_DBFOLDER});
+                                        }else{
+                                                Set(ATENDEDOR_DIRECTORY=);
+                                        }
+                                }
+                                if(${LEN(${ATENDEDOR_DBFILENAME})}>0){
+                                        if("${TOLOWER(${ATENDEDOR_DBFILENAME})}" != "default"){
+                                                Set(ATENDEDOR_FILENAME=${ATENDEDOR_DBFILENAME});
+                                        }
+                                }
+
+                                noop(${CUSTOMERSNAME}/${ATENDEDOR_DIRECTORY}/${ATENDEDOR_FILENAME});
+                                Read(option,${CUSTOMERSNAME}/${ATENDEDOR_DIRECTORY}/${ATENDEDOR_FILENAME},3,,1,2);
+
+                                if("${option}"="${DB_LANGUAGEOPTION_PT}"){Set(CHANNEL(language)=pt);Set(option=);goto VMmenulanguageoption;}
+                                else if("${option}"="${DB_LANGUAGEOPTION_ES}"){Set(CHANNEL(language)=es);Set(option=);goto VMmenulanguageoption;}
+                                Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+                        }
+                }
+                Set(LOCAL(vmboxResult)=${ODBC_GETDEFAULT_VMBOX(${Var_TO:-10},${attempt})});
+                if(${ODBCROWS}==1){
+                        Set(DB_DEFAULTVM=${CUT(vmboxResult,\,,1)});
+                        &do-VM(${DB_DEFAULTVM},);
+                }else{
+                        &do-VM(101,);
+                }
+                Hangup();
+        }
+        else if("${Profile_FWD${attempt}}"="hg"||"${Profile_FWD${attempt}}"="-"){
+                Hangup();
+        }
+
+	return;
+}

@@ -1,0 +1,135 @@
+context GLOBAL-HANGUP {
+
+    s => {
+        NoOp(================ GLOBAL HANGUP =================);
+        NoOp(Channel=${CHANNEL});
+        NoOp(Peer=${CHANNEL(peername)});
+        NoOp(Caller=${CALLERID(num)});
+        NoOp(Connected=${CONNECTEDLINE(num)});
+        NoOp(Context=${CONTEXT});
+
+        &do-hangup(${CONNECTEDLINE(num)});
+
+        return;
+    };
+}
+
+macro do-hangup(connectedline){
+
+        Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+        Set(TEMPchannel=${CHANNEL:4});
+        Set(CDR(server)=${SYSTEMNAME});
+        Set(CDR(mobilerate)=${DB_MOBILERATE});
+        Set(callduration=${CDR(billsec)});
+        Set(totalCost=0);
+        if(${LEN(${rate})}!=0){rate=${rate};}else{rate=0;}
+        Set(CDR(rate)=${rate});
+        Set(CDR(rateProvider)=${rateProvider});
+        Set(CDR(answeredtime)=${ANSWEREDTIME});
+        Set(lang=${CHANNEL(language)});
+        //Set(NOW_GMT=${STRFTIME(,,%Y-%m-%d %H:%M:%S,GMT)})
+
+        if(${LEN(${queuename})}>0){
+                if(${QUEUE_EXISTS(${queuename})}){
+                        if("${ABANDONED}"!="TRUE"){
+                                //Set(Queue_date=${STRFTIME(${EPOCH}, ,%Y-%m-%d %T)});
+                                if(${LEN(${AGENT})}>0){
+                                        QueueLog(${queuename},${UNIQUEID},${AGENT},COMPLETECALLER,99|${CDR(billsec)}|98|97);
+                                }else{
+                                        QueueLog(${queuename},${UNIQUEID},NONE,COMPLETECALLER,99|${CDR(billsec)}|98|97);
+                                }
+                        }
+                }
+        }
+
+        if("${${CUSTOMERSNAME}-isIncomingCall}"=="yes"){
+                NoOp(H leg for channel: ${CHANNEL});
+                NoOp(Callee leg h. Dialed peer: ${DIALEDPEERNAME} number:${DIALEDPEERNUMBER});
+                Set(LOCAL(AccountNameSize)=${LEN(${CUSTOMERSNAME})});
+                Set(LOCAL(callee)=${DIALEDPEERNUMBER:${AccountNameSize}});
+                Set(dstchannel=${CDR(dstchannel)});
+
+Set(DST_EXTENSION=${CUT(CUT(dstchannel,/,2),-,1):${LEN(${CUSTOMERSNAME})}});
+Set(CURRENT_EXTENSION=${CUT(CUT(CHANNEL,/,2),-,1):${LEN(${CUSTOMERSNAME})}});
+                Set(HAS_CUSTOMER=${REGEX("${CUSTOMERSNAME}" ${CHANNEL})});
+                if(${HAS_CUSTOMER}==0){
+                        Set(CURRENT_EXTENSION=${DST_EXTENSIONbz});
+                }
+                Set(channelcutVar=${CUT(dstchannel,\-,1)});
+                noop(############################## ExternalCallEnded);
+                UserEvent(ExternalCallEnded, accountCode:${CUSTOMERSNAME}, EventName:Edilson, Channel:${CHANNEL}, Callee:${DST_EXTENSION}, Caller:${CALLERID(num):-10}, UniqueID:${UNIQUEID}, LinkedID=${LINKED_ID},CallDuration:${callduration}, CallDirection:In, CallStartTimeGMT:${CALLSTART_GMT});
+
+                Set(separatorCount=${FIELDQTY(channelcutVar,/)});
+                Set(channelVar=);
+                if(${separatorCount}==2){
+                        // Remove "SIP/" from channel name
+                        channelVar=${CUT(channelcutVar,/,2)};
+                        Set(channelHasAccountcode=${REGEX("${CUSTOMERSNAME}" ${channelVar})});
+                        if(${channelHasAccountcode}==1){
+                                // size looks like an extension 3 or 4
+                                noop(channelVar=${channelVar});
+                                // channel name has accountcode
+                                channelVar=${STRREPLACE(channelVar,${CUSTOMERSNAME},,)};
+                                Set(CDR(peeranswered)=${channelVar});
+                        }
+                }
+                if(${LEN(${CDR(peeranswered)})}==0 || "${CDR(peeranswered)}"=="system" || "${CDR(peeranswered)}"=="outgoing"){
+                        // peeranswered hasn't been set yet
+                        Set(containsACCOUNTCODE=${REGEX("${CUSTOMERSNAME}" ${DIALEDPEERNUMBER})});
+                        if("${containsACCOUNTCODE}"=="1"){
+                                // has accountcode in the name, meaning it's an internal peer
+                                Set(peerNumber=${DIALEDPEERNUMBER:${AccountNameSize}});
+                                Set(CDR(peeranswered)=EX${peerNumber});
+                        }
+                        else{
+                                if(${LEN(${DIALEDPEERNUMBER})}==0){
+                                        if(${LEN(${resultVM})}>=3){
+                                                Set(CDR(peeranswered)=VM-${resultVM});
+                                        }else{
+                                                Set(CDR(peeranswered)=IVR);
+                                        }
+                                }
+                                else{
+                                        // it's forwarded call, since it's an incoming call with an extenal peername
+                                        // get the phone number out of the peer name
+                                        Set(peerNumber=${CUT(DIALEDPEERNUMBER,@,1)});
+                                        Set(CDR(peeranswered)=${peerNumber});
+                                }
+                        }
+                }
+        }else{
+                //  It's Outgoing Or Internal extensions
+                noop(=================================isIncomingCall=${${CUSTOMERSNAME}-isIncomingCall});
+                Set(LOCAL(AccountNameSize)=${LEN(${CUSTOMERSNAME})});
+noop(DIALEDOUTNUMBER=${DIALEDOUTNUMBER});
+noop(OUTGOINGSIPUSER=${OUTGOINGSIPUSER:${AccountNameSize}});
+noop(EXTEN=${EXTEN});
+noop(callerid number=${CALLERID(num)});
+                noop(######################################## 1 ExternalCallEnded);
+                UserEvent(ExternalCallEnded, accountCode:${CUSTOMERSNAME}, EventName:OutGoingHangUp, Channel:${CHANNEL}, Callee:${CALLERID(num)}, Caller:${connectedline}, UniqueID:${UNIQUEID}, LinkedID=${LINKED_ID},CallDuration:${callduration}, CallDirection:Out, CallStartTimeGMT:${CALLSTART_GMT});
+        }
+
+        if("${CDR(userfield)}"="MOBILE"){rate=${DB_MOBILERATE};}
+        Set(totalMinutes=${MATH(${callduration}/60,int)});      // Gets only the minutes  (int removes all decimal no rounding)
+        Set(totalSeconds=${MATH(${callduration}%60,int)});      // Gets only remiander the seconds
+        if(${LEN(${totalMinutes})}>0){
+                if(${LEN(${totalSeconds})}>0){
+                        if(${totalSeconds}>0){
+                                totalMinutes=${MATH(${totalMinutes}+1,int)};
+                                Set(totalCost=${MATH(${totalMinutes}*${rate})});
+                        }
+                }
+                Set(CDR(rateCallcost)=${totalCost});
+                if(${LEN(${international_groupcount})}>0){
+                        deletegroup=${DB_DELETE(${GROUPNAME}/${international_groupcount})};
+                }
+                if(${LEN(${local_groupcount})}>0){
+                        ss=${DB_DELETE(${CUSTOMERSNAME}_local/${local_groupcount})};
+                }
+        }
+
+        noop(Account ${CUSTOMERSNAME} is hanging up.);
+	return;
+}
+
+

@@ -1,0 +1,39 @@
+context ivr-EDILSON {
+	includes {BASICS;parkedcalls;};
+
+        100 => {
+                ivr:
+                Set(__CUSTOMERSNAME=${CONTEXT:4});
+		
+		Set(__DYNAMIC_FEATURES=VHCToOrlando);
+
+                &do-CUSTOM-MENU();
+
+                Hangup();
+
+		transfertoUSA:
+		Set(__DYNAMIC_FEATURES=);
+		Dial(SIP/${CUSTOMERSNAME}101,${FROM_DB_EXTENRINGTIME},TtKk);
+		// jump ${EXTEN};
+
+		Hangup();
+        };
+
+        _0XXXXXXXX => {
+                // INTERURBANO
+                Set(i=${EXTEN:-10});
+                jump 0115521${i:1};
+        };
+
+        _0XXXXXXXXXX => {
+                // INTERURBANO
+                Set(i=${EXTEN:-10});
+                jump 01155${EXTEN:-10};
+        };
+
+        _0XXXXXXXXXXX => {
+                // CELLULAR
+                jump 01155${EXTEN:-11};
+        };
+
+};

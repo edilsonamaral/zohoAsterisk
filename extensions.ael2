@@ -1,0 +1,2646 @@
+// DISPATCHER // do-FORWARDTO // do-FWD_TO_ENTRY_EXT // do-CUSTOM-MENU // do-MENU // do-ATENDEDOR
+// nano /etc/systemd/system/asterisk.service	[Unit]
+//						Description=Asterisk PBX
+//						After=network.target
+//
+//						[Service]
+//						Type=simple
+//						User=asterisk
+//						Group=asterisk
+//						ExecStart=/usr/sbin/asterisk -f -U asterisk -G asterisk
+//						ExecStop=/usr/sbin/asterisk -rx 'core stop gracefully'
+//						Restart=always
+//						RestartSec=5
+//						RuntimeDirectory=asterisk
+//
+//						[Install]
+//						WantedBy=multi-user.target
+//
+//  -----------------------------------------------------
+//   Permissions
+//	groupadd asterisk
+//	useradd -r -d /var/lib/asterisk -g asterisk asterisk
+//	chown -R asterisk:asterisk /var/log/asterisk
+//	chown -R asterisk:asterisk /var/run/asterisk
+//	chown -R asterisk:asterisk /var/spool/asterisk
+//	chown -R asterisk:asterisk /usr/lib/asterisk
+//	chown -R asterisk:asterisk /usr/lib64/asterisk
+//	
+//	sudo systemctl disable asterisk.service
+//	sudo rm /etc/rc.d/init.d/asterisk
+//	sudo systemctl daemon-reload
+//	sudo systemctl enable asterisk
+//	
+
+
+globals {
+	MAINSERVER=EVOLVE1;
+        EDTTIME=EDT+5;
+        EXTMINISIZE=3;
+};
+
+#include "/etc/asterisk/basics.ael"
+#include "/etc/asterisk/customers.ael"
+#include "/etc/asterisk/menus.ael"
+#include "/etc/asterisk/profiles.ael"
+#include "/etc/asterisk/entrypoint.ael"
+
+context parking_timeout{
+	s => {
+		NoOp(Parked call channel that timed out: ${CHANNEL(name)});
+		Playback(vm-goodbye);
+		Hangup();
+	}
+	h => {
+		//Set(CUSTOMERSNAME=${CONTEXT:4});
+		&do-hangup();
+		Hangup();
+	};
+}
+
+// Routes calls to extensions or queues based on menu option
+// Input: menuoption (string, selected menu option, e.g., "1", "2", "0")
+// Output: Dials extensions or jumps to voicemail/queue
+macro do-ATENDEDOR(menuoption){
+	&do-QUEUE(1);  // order matters. Before changing menuoption send it to queue since there is an option there that takes 0 as parameter 
+
+	// Normalize menuoption: default to "1" if empty or "0"
+	if ("${menuoption}" == "0" || "${LEN(${menuoption})}" == 0) {
+		Set(menuoption=1);
+	}
+
+	if(${LEN(${menuoption})}==0){Set(menuoption=1);}
+
+	Set(language=${CHANNEL(language)});
+
+	if("${CUSTOMERSNAME}"=="SIGNFACTORY"){
+		if(${menuoption}==3){
+			Read(option,${ATENDEDOR_DIRECTORY}/direction,3,,1,2);
+			goto ivr-${CUSTOMERSNAME}|100|ivr;
+		}
+	}
+        else if("${CUSTOMERSNAME}"=="PROKLEAN"){
+		if(${menuoption}==3){
+			Read(option,${ATENDEDOR_DIRECTORY}/direction,3,,1,2);
+			goto ivr-${CUSTOMERSNAME}|100|ivr;
+		}
+        }
+
+	if(${LEN(${PROFILE_NAME})}>0){
+		RINGTIME_1=${DB_RINGTIME${DB_OPTIONMENU${menuoption}}1};
+		RINGTIME_2=${DB_RINGTIME${DB_OPTIONMENU${menuoption}}2};
+		Set(EXTENSIONTORING_1=${DB_EXTENSIONTORING${DB_OPTIONMENU${menuoption}}1});
+		Set(EXTENSIONTORING_2=${DB_EXTENSIONTORING${DB_OPTIONMENU${menuoption}}2});
+	}else{
+		RINGTIME_1=${DB_RINGTIME${DB_OPTIONMENU${menuoption}}1};
+		RINGTIME_2=${DB_RINGTIME${DB_OPTIONMENU${menuoption}}2};
+		Set(EXTENSIONTORING_1=${DB_EXTENSIONTORING${DB_OPTIONMENU${menuoption}}1});
+		Set(EXTENSIONTORING_2=${DB_EXTENSIONTORING${DB_OPTIONMENU${menuoption}}2});
+	}
+
+	if(${LEN(${EXTENSIONTORING_1})}==0){
+		RINGTIME_1=45;
+		RINGTIME_2=45;
+		Set(EXTENSIONTORING_1=${DB_RECEPCIONIST_EXT});
+		Set(EXTENSIONTORING_2=${DB_RECEPCIONIST_EXT});
+        }
+
+        Set(ALSORING1=${DB_ALSORING${menuoption}1});
+        Set(ALSORING2=${DB_ALSORING${menuoption}2});
+        Set(ALSORING3=${DB_ALSORING${menuoption}3});
+        Set(ALSORING4=${DB_ALSORING${menuoption}4});
+
+	// Dial first group of extensions
+
+log(warning, ATENDEDOR RING=${EXTENSIONTORING_1} %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%);
+
+	&get-GROUPTODIAL(${EXTENSIONTORING_1},0);
+	if (${LEN(${DIALGROUP(${CUSTOMERSNAME})})} > 0) {
+		if ("${DB_SHOWMENUOPTION_NAME}" == "1") {
+			&get-CALLERID_TOADD(${menuoption});
+			Set(CALLERID(name)=${nametoAddToCalleriID}${CALLERID(name)});
+		}
+		Dial(${DIALGROUP(${CUSTOMERSNAME})},${RINGTIME_1},${IF("${DB_PLAYMUSICTRANSFER}"=="1"?m(${CUSTOMERSNAME}_${language}):r)}TtKk);
+	}
+
+	// Dial second group if defined
+	&get-GROUPTODIAL(${EXTENSIONTORING_2},1);
+	if (${LEN(${DIALGROUP(${CUSTOMERSNAME})})} > 0) {
+		Dial(${DIALGROUP(${CUSTOMERSNAME})},${RINGTIME_2},${IF("${DB_PLAYMUSICTRANSFER}"=="1"?m(${CUSTOMERSNAME}_${language}):r)}TtKk);
+	}
+
+	// Fallback to voicemail or receptionist
+	if ("${DB_RECEPCIONIST_EXT}" == "100" || "${LEN(${DB_RECEPCIONIST_EXT})}" == "0") {
+		log(WARNING, Invalid receptionist extension);
+		Hangup();
+	} else {
+		&do-VM(${DB_RECEPCIONIST_EXT},);
+		jump ${DB_RECEPCIONIST_EXT}@ivr-${CUSTOMERSNAME};
+	}
+
+	return;
+}
+
+macro get-GROUPTODIAL(ringlist, istimeout){
+	Set(DIALGROUP(${CUSTOMERSNAME})=);
+
+	Set(ringlist=${IF($["${ringlist:-1}" = ";"]?${ringlist:0:$[${LEN(${ringlist})}-1]}:${ringlist})}); // remove trailing ';'
+
+	if (${LEN(${ringlist})} >= 3) {
+		Set(quantity=${FIELDQTY(ringlist,;)});  // semicolon separator
+
+		if (${quantity} > 0) {
+			for (x=1; ${x} <= ${quantity}; x=${x} + 1) {
+				Set(ext_raw=${CUT(ringlist,;,${x})});
+				Set(ext=${FILTER(0-9,${ext_raw})});
+
+				// Skip empty or invalid extensions
+				if (${LEN(${ext})} == 0) {
+					NoOp(⛔ Skipping blank or invalid extension at position ${x});
+					continue;
+				}
+
+			Set(devstate=${TOUPPER(${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})})});
+
+                if ("${devstate}"=="NOT_INUSE" ||
+                        "${devstate}"=="INUSE" ||
+                        "${devstate}"=="RINGINUSE" ||
+                        "${devstate}"=="RINGING" ||
+                        "${devstate}"=="ONHOLD") {
+				Set(DIALGROUP(${CUSTOMERSNAME},add)=SIP/${CUSTOMERSNAME}${ext});
+				NoOp(✅ Added ${ext} to DIALGROUP);
+                } else {
+                    NoOp(⚠️ Skipped ${ext}, status = ${devstate});
+                }
+			}
+		}
+	}
+
+	if(${istimeout}==0){
+		&process-ALSORING(${ALSORING1});
+		&process-ALSORING(${ALSORING2});
+	}else{
+		&process-ALSORING(${ALSORING3});
+		&process-ALSORING(${ALSORING4});
+	}
+	return;
+}
+
+macro process-ALSORING(number) {
+    if (${LEN(${number})} >= 10) {
+        if ("${DB_ACCOUNT_ALLOW_SMS_OUT}" == "1") {
+            &DO-SENDSMS(${number},,0);
+        }
+
+        Set(localprov=${IF(${LEN(${DB_DIALPROV1})} > 0 ? ${DB_DIALPROV1} : bulkvs)});
+
+        if ("${localprov}" == "anveo") {
+            Set(DIALGROUP(${CUSTOMERSNAME},add)=SIP/0EDILS1${number}@sbc.anveo.com);
+        } else {
+            Set(DIALGROUP(${CUSTOMERSNAME},add)=SIP/1${number}@${localprov});
+        }
+    }
+
+	return;
+}
+
+macro get-RINGGROUP(peer){
+	Set(DIALGROUP(${CUSTOMERSNAME}${peer})=);
+	Set(result=${ODBC_GETEXTGROUPS(${CUSTOMERSNAME},${peer})});
+
+	if(${LEN(${result})}>=3){
+		noop(RESULT=${result});
+		Set(quantity=${FIELDQTY(result,;)});  // semicolon-separated
+		if(${quantity}>0){
+			for(x=1;${x}<=${quantity};x=${x}+1){
+				Set(ext=${CUT(result,;,${x})});
+				Set(devstate=${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})});
+				if (${devstate} != "UNAVAILABLE" &&
+					${devstate} != "UNKNOWN" &&
+					${devstate} != "INVALID" &&
+					${devstate} != "BUSY") {
+					Set(DIALGROUP(${CUSTOMERSNAME}${peer},add)=SIP/${CUSTOMERSNAME}${ext});
+				}
+			}
+		}
+	}
+	return;
+}
+
+macro terminate(logmessage) {
+    Set(FROM_IP=${CHANNEL(recvip)});
+    Set(FROM_IP2=${CHANNEL(peerip)});
+
+    Set(Var_All=${SIP_HEADER(TO)});
+    Set(Caller=${CUT(Var_All,@,1)});
+    Set(Var_TO=${Caller:5});
+
+    Set(message=ip ${FROM_IP} or ${FROM_IP2} extension: ${CALLERID(all)} calling exten:${Var_TO});
+    Set(fullmsg=${logmessage} | ${message});
+
+    Set(CDR(userfield)=TERM:${logmessage});
+
+    &send-email(${fullmsg},[ CALL TERMINATED]);
+    log(WARNING,TERMINATED: ${fullmsg});
+    
+    Playtones(congestion);
+    wait(1);
+    Hangup();
+    return;
+}
+
+
+macro trap(logmessage){
+        Set(FROM_IP=${CHANNEL(recvip)});
+        Set(FROM_IP2=${CHANNEL(peerip)});
+	Set(logmessage=${REPLACE(${logmessage},,,)}); // Avoid bug if ${logmessage} ever includes a comma, quote, or newline, the AGI may break or misparse arguments.
+
+	Set(LOCAL(trapped)=${DB(${CUSTOMERSNAME}TRAP${FROM_IP}/count)});
+	Set(LOCAL(CallTime)=${STRFTIME(${EPOCH},,%s)});
+
+	if(${LEN(${trapped})}==0){
+		Set(DB(${CUSTOMERSNAME}TRAP${FROM_IP}/count)=1);
+		Set(DB(${CUSTOMERSNAME}TRAP${FROM_IP}/time)=${CallTime});
+	}else{
+
+		Set(DB(${CUSTOMERSNAME}TRAP${FROM_IP}/count)=${INC(trapped)});
+		Set(LOCAL(timenow)=${STRFTIME(${EPOCH},,%s)});
+		Set(LOCAL(LastCallTime)=${DB(${CUSTOMERSNAME}TRAP${FROM_IP}/time)});
+		Set(LOCAL(timediff)=$[${timenow}-${LastCallTime}]);
+
+		if(${timediff}<10){
+			message = ${timediff};
+		}
+
+		if(${LEN(${trapped})}>5){
+			Set(LOCAL(MASK)=255.255.0.0);
+			agi(addfirewallrule.pl,${FROM_IP},${MASK},${logmessage});
+		}
+	}
+
+	Set(Var_All=${SIP_HEADER(TO)});
+	Set(Caller=${CUT(Var_All,@,1)});   //  divide o header em 2
+	Set(Var_TO=${Caller:5});           //  pega so os numeros depois dos 5 primeiros caracteres
+	Set(TrapCount=${DB(${CUSTOMERSNAME}TRAP${FROM_IP}/count)});
+	Set(message=TRAP ${HOSTNAME} | IP ${FROM_IP} tried exten ${Var_TO} | Count: ${TrapCount});
+	&send-email(${message},TRAP ${message});
+	log(WARNING,Attack failed for '${FROM_IP}' or '${FROM_IP2}' calling ${Var_TO});
+
+	Playtones(congestion);
+	Playtones(congestion);
+	Playtones(congestion);
+
+	Hangup();
+	return;
+}
+
+macro record(force){
+	StopMixMonitor();
+	if("${DB_HASMONITOR}"=="1" || "${force}"=="1"){
+		local Name=${FILTER(A-Za-z0-9,${CALLERID(name)})};
+		local Num=${FILTER(0-9,${CALLERID(num):-12})};
+		local To=${FILTER(A-Za-z0-9,${EXTEN})};
+		CUSTOMERSNAME=${FILTER(A-Za-z0-9,${CUSTOMERSNAME})};
+
+		// Validate critical variables
+		if("${CUSTOMERSNAME}" == "") {
+			NoOp(ERROR: CUSTOMERSNAME is unset or invalid);
+			return;
+		}
+		if("${Num}" == "") {
+			NoOp(WARNING: Num is empty, using default);
+			Num="unknown";
+		}
+		
+                if(${LEN(${To})} < 3){
+                        NoOp(WARNING: Setting default To=100 as EXTEN is too short: ${EXTEN});
+                        To="100";
+                }
+
+		Set(CommandToMix="/var/lib/asterisk/agi-bin/saveMixMonitorToDatabase.agi");
+		Set(notes="none");
+		Set(monitorPath="/var/spool/asterisk/monitor/${CUSTOMERSNAME}");
+
+		if (${STAT(e,${monitorPath})}!=0) {
+			NoOp(❌ Directory \${monitorPath} does not exist. Skipping MixMonitor);
+			System(mkdir -p ${monitorPath});
+		}
+
+		Set(mixname="${Num}-${STRFTIME(${EPOCH},America/New_York,%m-%d-%Y_%H_%M_%S)}");
+		NoOp(MixMonitor command: ${CommandToMix} ${mixname} ${CUSTOMERSNAME} ${notes} "${Name}" "${Num}" ${To} ${UNIQUEID});
+		wait(1);  // ensure audio path
+		MixMonitor(${CUSTOMERSNAME}/${mixname}.wav,b,"${CommandToMix}" ${mixname} ${CUSTOMERSNAME} ${notes} "${Name}" "${Num}" ${To} ${UNIQUEID});
+
+		noop(MIXMONITOR_FILENAME=${MIXMONITOR_FILENAME});
+		if("${MIXMONITOR_FILENAME}"=="") {
+			NoOp(❌ ERROR: MixMonitor failed to start);
+		}
+	}
+	return;
+}
+
+macro dialExtension(extnumber){
+	jump ${extnumber}@ivr-${CUSTOMERSNAME};
+	return;
+};
+
+macro dialExternalNumbers(){
+        if(${LEN(${ringlist})}>10){
+                LOCAL(quantity=${FIELDQTY(ringlist,\;)});
+                if(${quantity}>0){
+                        for(x=1;${x}<=${quantity};x=${x}+1){
+                                Set(ext=${CUT(ringlist,;,${x})});
+                                Set(DIALGROUP(${CUSTOMERSNAME},add)=SIP/${CUSTOMERSNAME}${ext});
+                        }
+	                if(${LEN(${DB_DIALPROV1})}>0){
+	                        if("${DB_DIALPROV1}"=="anveo"){
+					Dial(${DIALGROUP(${CUSTOMERSNAME})},${RINGTIME_2},${IF("${DB_PLAYMUSICTRANSFER}"=="1"?m(${CUSTOMERSNAME}_${CHANNEL(language)})):r}TtKk);
+				}else{
+					Dial(${DIALGROUP(${CUSTOMERSNAME})},${RINGTIME_2},${IF("${DB_PLAYMUSICTRANSFER}"=="1"?m(${CUSTOMERSNAME}_${CHANNEL(language)})):r}TtKk);
+				}
+			}else{
+				Dial(${DIALGROUP(${CUSTOMERSNAME})},${RINGTIME_2},${IF("${DB_PLAYMUSICTRANSFER}"=="1"?m(${CUSTOMERSNAME}_${CHANNEL(language)})):r}TtKk);
+			}
+                }
+        }
+        return;
+}
+
+macro checkOffenders(customer,callerid){
+        Set(LOCAL(OffenderResults)=${ODBC_GETDIDOFFENDER(${customer},${callerid})});
+        if(${ODBCROWS} == 1){
+                // Offenders
+                Set(IS_OFFENDER=${CUT(OffenderResults,\,,1)});
+                if("${IS_OFFENDER}"="1"){
+                        Set(LOCAL(counter)=1);
+                        torture:
+                        LOG(WARNING,  OFFENDER ${CALLERID(num)} is being blocked by ${CUSTOMERSNAME});
+                        //Answer();
+                        Wait(2);
+                        Dial(local/talk@BASICS,30,r);
+                        MusicOnHold(CHANNEL(musicclass),50);
+                        if(${counter}>5) Hangup();
+                        goto torture;
+			Hangup();
+                }
+        }
+	return;
+}
+
+macro isInternationalCallingTollFree(){
+        // Do not allow caller from outside USA to call our Toll Free numbers
+        if(${LEN(${Var_TO})}>=10){
+                Set(LOCAL(istoolfree)=${Var_TO:-10});
+                Set(LOCAL(tollfreePrefix)=${istoolfree:0:3});
+                if(${tollfreePrefix}==800 | ${tollfreePrefix}==888 | ${tollfreePrefix}==877 | ${tollfreePrefix}==866 | ${tollfreePrefix}==855 | ${tollfreePrefix}==844 | ${tollfreePrefix}==833){
+                        Set(LOCAL(INCOMING_NUM)=${FILTER(0-9,${CALLERID(num):-12})});
+                        if(${LEN(${INCOMING_NUM})}>11){
+                                //&send-email(call to ${istoolfree} from ${CALLERID(num)} blocked because is an international caller to a toll free number,${CUSTOMERSNAME});
+                                Hangup();
+                        }
+                }
+        }
+	return;
+}
+
+
+/* -------------------------------------------------------------------------
+   macro dispatcher(attempt)
+   This macro is the entry point for inbound calls after DID lookup.
+   Enhancement: Adds device-aware Answer logic controlled by Zoho.
+   ------------------------------------------------------------------------- */
+macro dispatcher(attempt) {
+    Set(CUSTOMERSNAME=${DB_ACCOUNT});
+
+    if (${LEN(${attempt})} == 0) { Set(attempt=0); }
+
+    if (${attempt} >= 1) {
+        goto attempt;
+    }
+
+
+log(warning,  CREATE PARK ***************************************************************************);
+	Set(PARKINGDYNAMIC=default);
+
+    Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+    Set(CDR(peeranswered)=system);
+    includes { parkedcalls; }
+
+    &checkOffenders(${CUSTOMERSNAME}, ${CALLERID(num):-10});
+    &isInternationalCallingTollFree();
+
+    // ============================================================
+    //  DEVICE-DETECTION + ZOHO-CONTROLLED ANSWER BLOCK
+    //  (Inserted exactly before your original Answer())
+    // ============================================================
+
+    // Extract SIP User-Agent
+    Set(UA=${SIPUSERAGENT});
+    NoOp("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ Caller SIP-UA: ${UA}");
+
+    // Default answer mode
+    Set(LOCAL(EVOLVE_ANSWER_MODE)=generic);
+
+    // Cisco Phones
+    if (${REGEX("Cisco" ${UA})}) {
+        NoOp("EVOLVE Answer Mode: Cisco detected: ${UA}");
+        Set(LOCAL(EVOLVE_ANSWER_MODE)=cisco_autoanswer);
+    }
+
+    // Yealink Phones
+    if (${REGEX("Yealink" ${UA})}) {
+        NoOp("EVOLVE Answer Mode: Yealink detected: ${UA}");
+        Set(LOCAL(EVOLVE_ANSWER_MODE)=yealink_autoanswer);
+    }
+
+    // Poly / Polycom Phones
+    if (${REGEX("Poly" ${UA})} | ${REGEX("Polycom" ${UA})}) {
+        NoOp("EVOLVE Answer Mode: Poly/Polycom detected: ${UA}");
+        Set(LOCAL(EVOLVE_ANSWER_MODE)=poly_autoanswer);
+    }
+
+    // Zoho-controlled auto-answer flag
+    if ("${EVOLVE_REQUESTED_ANSWER}" = "") {
+        Set(EVOLVE_REQUESTED_ANSWER=no);
+    }
+
+    NoOp("Zoho desires auto-answer? ${EVOLVE_REQUESTED_ANSWER}");
+
+    // Conditional auto-answer
+    if ("${EVOLVE_REQUESTED_ANSWER}" = "yes") {
+
+        NoOp("ZOHO REQUESTED ANSWER — Applying device-specific method.");
+
+        switch (${LOCAL(EVOLVE_ANSWER_MODE)}) {
+
+            // Cisco — AutoAnswer via Alert-Info
+            case cisco_autoanswer:
+                NoOp("Answer Mode: Cisco — injecting Alert-Info: AutoAnswer");
+                SIPAddHeader("Alert-Info: <sip:AutoAnswer>");
+                break;
+
+            // Yealink — works also with Alert-Info
+            case yealink_autoanswer:
+                NoOp("Answer Mode: Yealink — injecting Alert-Info: auto-answer");
+                SIPAddHeader("Alert-Info: Auto Answer");
+                break;
+
+            // Poly / Polycom
+            case poly_autoanswer:
+                NoOp("Answer Mode: Poly/Polycom — injecting Alert-Info: Ring Answer");
+                SIPAddHeader("Alert-Info: Ring Answer");
+                break;
+
+            // Fallback generic
+            default:
+                NoOp("Generic answer mode — no special headers.");
+                break;
+        }
+    }
+
+    // === ORIGINAL ANSWER() CALL ===
+    //answer();
+
+    // LOOP DETECT
+    if ("${CHANNEL}" == "${LOOPCHANNELNAME}") {
+        log(WARNING,  LOOP DETECTED ON ACCOUNT ${CUSTOMERSNAME} Channel name=${LOOPCHANNELNAME});
+        &send-email(account ${CUSTOMERSNAME} LOOP  Channel name=${LOOPCHANNELNAME}, ${MAINSERVER});
+        Hangup();
+    }
+
+    Set(__LOOPCHANNELNAME=${CHANNEL});
+
+    &get-BASICVARS(${CUSTOMERSNAME});
+    &checklocalCNAM(${DB_DID});
+
+    Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+    Set(CDR(server)=${SYSTEMNAME});
+    Set(CDR(destination)=${DB_DID});
+    Set(CDR(didreceivingCall)=${Var_TO});
+    Set(CDR(rateProvider)=incomming);
+    Set(__${CUSTOMERSNAME}-isIncomingCall=yes);
+
+    &record(0);
+
+    if (${LEN(${DB_LANGUAGE})} == 0) {
+        DB_LANGUAGE=en;
+    }
+
+    Set(CHANNEL(language)=${DB_LANGUAGE});
+
+    &get-ISCONGESTION(${incomming});
+
+    // Timeout setup
+    if (${LEN(${DB_TIMEOUT})} == 0) {
+        DB_TIMEOUT=7200;
+    }
+    Set(TIMEOUT(absolute)=${DB_TIMEOUT});
+
+    &holiday-greetings();
+
+    attempt:
+
+    &do-FORWARDTO(${attempt});
+    &do-FORWARDTO(${attempt});
+
+    log(warning, FAILED going to VM);
+    &do-VM(${DB_RECEPCIONIST_EXT}, );
+    Hangup();
+    return;
+}
+
+macro do-FORWARDTO(attemptFWD){
+	Set(attempt=${attemptFWD});
+	Set(attempt=$[${attempt}+1]);
+
+	if(${LEN(${DB_FWD${attempt}})}==0 || ${LEN(${DB_ACCOUNT})}==0){
+		&send-email(no ForwardTo or accountcode on DB did=${DB_DID}, ${MAINSERVER});
+		Hangup();
+	}
+
+	Set(comebackTodispatcher=no);
+
+	if(${attempt}==1 && ${LEN(${DB_FWD${attempt}})}>1 && "${DB_FWD${attempt}}"!="ra"){
+		&do-CHECKSCHEDULE_EXCEPTION();
+	}
+
+	Set(LOCAL(language)=${CHANNEL(language)});
+	if("${PROFILE_PLAYPRIVACY}"=="1")Playback(monitorrecorded);
+
+	Set(TRACKED_CHANNEL=${CHANNEL});
+
+	switch("${DB_FWD${attempt}}") {
+	case "mn":
+		&handle-FWD-mn(${attempt});
+		break;
+	case "ph":
+		&handle-FWD-ph(${attempt});
+		break;
+	case "gr":
+		&handle-FWD-gr(${attempt});
+		break;
+	case "ra":
+		&RequestToDialOut();
+		break;
+	case "vm":
+		&handle-FWD-vm(${attempt});
+		break;
+	case "hg":
+	case "-":
+		Hangup();
+		break;
+	default:
+		NoOp(Unknown forward type: ${DB_FWD${attempt}});
+		Hangup();
+		break;
+	}
+	return;
+}
+
+macro handle-FWD-mn(attempt) {
+	//log(warning,$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ FORWARDING TO MENU);
+	if(${LEN(${DB_FWD2})}>1){
+		Set(comebackTodispatcher=yes);
+	}
+	&do-FWD_TO_ENTRY_EXT();
+	return;
+}
+
+macro handle-FWD-ph(attempt) {
+    Set(RINGTIME_FROM_DB_RINGTIME=${DB_RINGTIME});
+
+    Set(LOCAL(fwdresult)=${ODBC_GETDIDFWDTOPHONE(${CUSTOMERSNAME},${DB_DID},${CHANNEL(language)})});
+
+    if (${ODBCROWS} == 1) {
+        Set(LOCAL(DB_FWDTOPHONE1)=${CUT(fwdresult,\,,1)});
+        Set(LOCAL(DB_FWDTOPHONE2)=${CUT(fwdresult,\,,2)});
+        Set(LOCAL(DB_FWDTOPHONE3)=${CUT(fwdresult,\,,3)});
+        Set(LOCAL(DB_FWDTOPHONE_RINGTIME1)=${CUT(fwdresult,\,,4)});
+        Set(LOCAL(DB_FWDTOPHONE_RINGTIME2)=${CUT(fwdresult,\,,5)});
+        Set(LOCAL(DB_FWDTOPHONE_RINGTIME3)=${CUT(fwdresult,\,,6)});
+        Set(LOCAL(DB_FWDTOPHONE_PLAYGREETING)=${CUT(fwdresult,\,,7)});
+        Set(LOCAL(DB_FWDTOPHONE_GREETINGFILE)=${CUT(fwdresult,\,,8)});
+    }
+
+    Set(local_fwdtophone=${LEN(${DB_FWDTOPHONE${attempt}})});
+
+    if (${LEN(${DB_FWDTOPHONE_RINGTIME${attempt}})} > 0) {
+        if (${local_fwdtophone} == 3 || ${local_fwdtophone} == 4 || ${local_fwdtophone} >= 10) {
+            if ("${DB_ACCOUNT_ALLOW_SMS_OUT}" == "1") {
+                if (${local_fwdtophone} == 10) {
+                    &DO-SENDSMS(${DB_FWDTOPHONE${attempt}},,1);
+                }
+            }
+
+            if ("${DB_FWDTOPHONE_PLAYGREETING}" == "1") {
+                fwdoption:
+                if (${ODBCROWS} == 1) {
+                    &get-audio(${CUSTOMERSNAME},${DB_FWDTOPHONE_GREETINGFILE});
+                    if (${LEN(${ATENDEDOR_FILENAME})} > 1) {
+                        Read(option,${CUSTOMERSNAME}/${ATENDEDOR_FILENAME},3,,1,2);
+                    }
+                    if ("${option}" == "${DB_LANGUAGEOPTION_PT}") {
+                        Set(CHANNEL(language)=pt);
+                        Set(option=);
+                        goto fwdoption;
+                    } else if ("${option}" == "${DB_LANGUAGEOPTION_ES}") {
+                        Set(CHANNEL(language)=es);
+                        Set(option=);
+                        goto fwdoption;
+                    }
+
+                    Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+                    if ("${PROFILE_PLAYPRIVACY}" == "1") {
+                        Playback(monitorrecorded);
+                    }
+                }
+            }
+
+            if (${LEN(${DB_FWDTOPHONE_RINGTIME${attempt}})} == 0) {
+                Set(DB_FWDTOPHONE_RINGTIME${attempt}=60);
+            }
+
+            Set(RINGTIME_FROM_DB_RINGTIME=${DB_FWDTOPHONE_RINGTIME${attempt}});
+            &dialExtension(${DB_FWDTOPHONE${attempt}});
+        }
+
+    } else if (${local_fwdtophone} == 3 || ${local_fwdtophone} == 4 || ${local_fwdtophone} >= 10) {
+        if ("${DB_PLAYGREETING}" == "1") {
+            forwardoption:
+            Read(option,${CUSTOMERSNAME}/atendedor,1,,1,1);
+            if ("${option}" == "${DB_LANGUAGEOPTION_PT}") {
+                Set(CHANNEL(language)=pt);
+                Set(option=);
+                goto forwardoption;
+            } else if ("${option}" == "${DB_LANGUAGEOPTION_ES}") {
+                Set(CHANNEL(language)=es);
+                Set(option=);
+                goto forwardoption;
+            }
+
+            Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+            if ("${PROFILE_PLAYPRIVACY}" == "1") {
+                Playback(monitorrecorded);
+            }
+        }
+
+        Set(RINGTIME_FROM_DB_RINGTIME=${DB_RINGTIME});
+        &dialExtension(${DB_FWDTOPHONE${attempt}});
+    } else {
+        log(warning, Cannot resolve where to send this call. Account = ${CUSTOMERSNAME});
+        send(Cannot resolve where to send this call. Account = ${CUSTOMERSNAME}, ${CUSTOMERSNAME});
+    }
+
+    return;
+}
+
+macro SetIsIncomingAnswered(account, calloutnumber, callStartGMT){
+	noop(BLINDTRANSFER=${BLINDTRANSFER});noop(AVAILORIGCHAN=${AVAILORIGCHAN});
+        Set(LOCAL(AccountNameSize)=${LEN(${account})});
+       // UserEvent(ExternalCallAnswered, AccountCode:${account}, EventName:OutGoingAnswer, Channel:${CHANNEL}, Callee:${DIALEDPEERNUMBER}, Caller:${calloutnumber}, UniqueID:${UNIQUEID}, LinkedID=${LINKED_ID}, CallDirection:In, CallStartTimeGMT:${callStartGMT});
+        return;
+};
+
+macro handle-FWD-gr(attempt) {
+	for(x=1;${x}<=3;x=${x}+1){
+		Set(LOCAL(getgroupresult)=${ODBC_GETRING_GROUPMEMBERS(${CUSTOMERSNAME},${Original_Var_TO:-10},${x},${CHANNEL(language)})});
+		if(${ODBCROWS} == 0){ return; }
+
+		Set(GR_MEMBERS01=${CUT(getgroupresult,\,,1)});
+		Set(GR_RING_TO_01=${CUT(getgroupresult,\,,2)});
+		Set(GR_AUDIO=${CUT(getgroupresult,\,,3)});
+		Set(GR_PLAY_ATENDEDOR=${CUT(getgroupresult,\,,4)});
+
+		Set(LOCAL(quantity)=${FIELDQTY(GR_MEMBERS01,\;)});
+		if(${quantity}==0){ return; }
+
+		Set(DIALGROUP(${CUSTOMERSNAME}_SIPUSERS)=);
+		Set(DIALGROUP(${CUSTOMERSNAME}_Ext_Numbers)=);
+		for(y=1;${y}<=${quantity};y=${y}+1){
+			Set(LOCAL(ext)=${CUT(GR_MEMBERS01,;,${y})});
+			if(${LEN(${ext})}==0) break;
+			if(${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})}!=BUSY && ${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})}!=UNAVAILABLE && ${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})}!=UNKNOWN && ${DEVICE_STATE(SIP/${CUSTOMERSNAME}${ext})}!=INVALID ){
+				Set(DIALGROUP(${CUSTOMERSNAME}_SIPUSERS,add)=SIP/${CUSTOMERSNAME}${ext});
+				Set(DIALGROUP(${CUSTOMERSNAME}_Ext_Numbers,add)=${ext});
+			}
+		}
+
+		Set(LOCAL(GROUP_FIRST)=${DIALGROUP(${CUSTOMERSNAME}_SIPUSERS)});
+		if (${LEN(${GROUP_FIRST})} < 3) {
+			log(warning, Group has no members or no extension on-line);
+			continue;
+		}
+
+		// Optional Audio / Atendedor
+		if ("${GR_PLAY_ATENDEDOR}" = "1") {
+			&get-audio(${CUSTOMERSNAME}, ${GR_AUDIO});
+			Read(option3, ${CUSTOMERSNAME}/${ATENDEDOR_FILENAME}, 1,,1,2);
+		}
+
+		Set(LOCAL(peersToRing)=${DIALGROUP(${CUSTOMERSNAME}_Ext_Numbers)});
+
+		Set(LOCAL(idx)=1);
+		while (1) {
+			Set(LOCAL(chan)=${CUT(GROUP_FIRST,&,${idx})});
+			if ("${chan}" = "") {
+				break;
+			}
+
+			// Extract only the numeric extension from SIP/CUST101
+			Set(LOCAL(ext)=${chan:${LEN(SIP/${CUSTOMERSNAME})}});
+		//	UserEvent(StartExternalIncoming, accountCode:${CUSTOMERSNAME}, EventName:Edilson, Channel:${CHANNEL}, Callee:${ext}, Caller:${Var_From}, UniqueID:${UNIQUEID}, LinkedID:${LINKED_ID}, callduration:0, CallDirection:In, CallStartTimeGMT:${CALLSTART_GMT},peersToRing:${peersToRing},RawMessage:"Call started in 'GR'");
+			Set(idx=${INC(idx)});
+		}
+
+		Set(LOCAL(pMusic)=${IF("${DB_PLAYMUSICTRANSFER}"=="1" ? m(${CUSTOMERSNAME}_${CHANNEL(language)}):r)});
+		Dial(${GROUP_FIRST},${GR_RING_TO_01},${pMusic}U(SetIsIncomingAnswered^${CUSTOMERSNAME}^${Var_From:-10}^${CALLSTART_GMT})iTtKk);
+		if("${HANGUPCAUSE}"="17"){  //  Busy
+			Noop(Peer is DIALGROUP is busy or rejected the call);
+			return;
+		}
+	}
+	return;
+}
+
+macro handle-FWD-vm(attempt) {
+	log(warning,Forward to VM);
+	VMmenulanguageoption:
+	Set(LOCAL(result)=${ODBC_GETATENDEDOR_FILE(${CUSTOMERSNAME},${Var_TO:-10})});
+	if(${ODBCROWS} == 1){
+		Set(ATENDEDOR_DBFILENAME=${CUT(result,\,,1)});
+		Set(ATENDEDOR_DBFOLDER=${CUT(result,\,,2)});
+		Set(ATENDEDOR_PLAYATENDEDOR_FOR_VM=${CUT(result,\,,3)});
+		if("${ATENDEDOR_PLAYATENDEDOR_FOR_VM}"=="1"){
+			if(${LEN(${ATENDEDOR_DBFOLDER})}>0 && "${TOLOWER(${ATENDEDOR_DBFOLDER})}" != "default"){
+				Set(ATENDEDOR_DIRECTORY=${ATENDEDOR_DBFOLDER});
+			}
+			if(${LEN(${ATENDEDOR_DBFILENAME})}>0 && "${TOLOWER(${ATENDEDOR_DBFILENAME})}" != "default"){
+				Set(ATENDEDOR_FILENAME=${ATENDEDOR_DBFILENAME});
+			}
+			Read(option,${CUSTOMERSNAME}/${ATENDEDOR_DIRECTORY}/${ATENDEDOR_FILENAME},3,,1,2);
+			if("${option}"=="${DB_LANGUAGEOPTION_PT}"){Set(CHANNEL(language)=pt);Set(option=);goto VMmenulanguageoption;}
+			else if("${option}"=="${DB_LANGUAGEOPTION_ES}"){Set(CHANNEL(language)=es);Set(option=);goto VMmenulanguageoption;}
+			Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+		}
+	}
+	Set(LOCAL(vmboxResult)=${ODBC_GETDEFAULT_VMBOX(${Var_TO:-10},${attempt})});
+	if(${ODBCROWS}==1){
+		Set(DB_DEFAULTVM=${CUT(vmboxResult,\,,1)});
+		&do-VM(${DB_DEFAULTVM},);
+	}else{
+		&do-VM(101,);
+	}
+	Hangup();
+	return;
+}
+
+macro do-CHECKSCHEDULE_EXCEPTION(){
+	Set(did=${Var_TO:-10});
+	Set(result=${ODBC_GETSCHEDULEEXCEPTION(${did},${CUSTOMERSNAME})});
+	if(${LEN(${result})}==0){
+		&do-CHECKSCHEDULE(0);
+		return;
+	}
+
+	Set(DB_SCH_EXCEPTION_IS_EXCEPTION=${CUT(result,\,,1)});
+	Set(DB_SCH_EXCEPTION_FORWARDTO=${CUT(result,\,,2)});
+	Set(LOCAL(DB_SCH_EXCEPTION_SET_ISOFFHOURS)=${CUT(result,\,,3)});
+	Set(DB_SCH_EXCEPTION_PLAYFILE=${CUT(result,\,,4)});
+	Set(DB_SCH_EXCEPTION_PLAYFILE_NAME=${CUT(result,\,,5)});
+	Set(DB_SCH_EXCEPTION_PLAYAFTERHOURS=${CUT(result,\,,6)});
+	Set(DB_SCH_EXCEPTION_HANGUP_AFTER_PLAYAFTERHOURS=${CUT(result,\,,7)});
+	Set(DB_SCH_EXCEPTION_VM_AFTER_PLAYAFTERHOURS=${CUT(result,\,,8)});
+	Set(DB_SCH_EXCEPTION_HAS_FORWARD=${CUT(result,\,,9)});
+	Set(DB_SCH_EXCEPTION_PLAY_TIF=${CUT(result,\,,10)});
+	Set(DB_SCH_EXCEPTION_TIMEOFDAYFILE=${CUT(result,\,,11)});  
+
+	Set(DIALGROUP(${CUSTOMERSNAME}_EXCEPTION)=);
+
+	if("${DB_SCH_EXCEPTION_IS_EXCEPTION}" != "1"){
+		// Not an exception
+		log(warning, Not an exception RETURN);
+		return;
+	}
+
+	if("${DB_SCH_EXCEPTION_PLAY_TIF}"=="1"){
+		//  This is intended to play a file just for lunch breaks or a short period during working hours, But I should work more on this. It can have a VM option or a forward.
+		if(${LEN(${DB_SCH_EXCEPTION_TIMEOFDAYFILE})}>0){
+			&get-audio(${CUSTOMERSNAME},${DB_SCH_EXCEPTION_TIMEOFDAYFILE});
+			if(${LEN(${ATENDEDOR_FILENAME})}>0){
+				Playback(${CUSTOMERSNAME}/${ATENDEDOR_FILENAME});
+				Hangup();
+			}
+			log(WARNING, IT SHOULD NOT HERE);
+		}
+	}
+
+	if("${DB_SCH_EXCEPTION_SET_ISOFFHOURS}"=="1"){
+		&do-CHECKSCHEDULE(1);
+	}
+
+	if("${DB_SCH_EXCEPTION_PLAYFILE}"=="1"){
+		&get-audio(${CUSTOMERSNAME},${DB_SCH_EXCEPTION_PLAYFILE_NAME});
+		if(${LEN(${ATENDEDOR_FILENAME})}>0){
+			Playback(${CUSTOMERSNAME}/${ATENDEDOR_FILENAME});
+		}
+	}
+
+	if("${DB_SCH_EXCEPTION_HAS_FORWARD}"="1" && (${LEN(${DB_SCH_EXCEPTION_FORWARDTO})}==10 || ${LEN(${DB_SCH_EXCEPTION_FORWARDTO})}==21)){
+		//  Needs to check if it has to play different audio or play afterhours anyway before forwarding
+		quantity=${FIELDQTY(DB_SCH_EXCEPTION_FORWARDTO,\;)};
+
+		log(warning, EXCEPTION FORWARD TO= ${DB_SCH_EXCEPTION_FORWARDTO});
+
+		if(${quantity}>0){
+			for(x=1;${x}<=${quantity};x=${x}+1){
+				Set(ext=${CUT(DB_SCH_EXCEPTION_FORWARDTO,;,${x})});
+				if(${LEN(${DB_DIALPROV1})}>0){
+                                        if("${DB_DIALPROV1}"=="bulkvs"){
+                                                Set(DIALGROUP(${CUSTOMERSNAME}_EXCEPTION,add)=SIP/1${ext}@bulkvs);
+					}else if("${DB_DIALPROV1}"=="anveo"){
+						Set(DIALGROUP(${CUSTOMERSNAME}_EXCEPTION,add)=SIP/0EDILS1${ext}@sbc.anveo.com);
+					}else if("${DB_DIALPROV1}"=="voipinnovations"){
+						Set(DIALGROUP(${CUSTOMERSNAME}_EXCEPTION,add)=SIP/1${ext}@voipinnovations);
+					}else if("${DB_DIALPROV1}"=="voipms"){
+						Set(DIALGROUP(${CUSTOMERSNAME}_EXCEPTION,add)=SIP/1${ext}@voipms);
+					}
+				}
+			}
+		}
+	}else if(${LEN(${DB_SCH_EXCEPTION_FORWARDTO})}==3){
+		// local extension, Allows one extension to ring on an exception
+		Set(DIALGROUP(${CUSTOMERSNAME}_EXCEPTION,add)=Local/1${ext}@ivr-${CUSTOMERSNAME});
+	}else if("${DB_SCH_EXCEPTION_VM_AFTER_PLAYAFTERHOURS}"=="1"){
+		&do-VM(${DB_RECEPCIONIST_EXT},);
+	}else{
+		if("${DB_SCH_EXCEPTION_IS_EXCEPTION}"=="1" ){
+			log(warning,There is an exception for ${CUSTOMERSNAME} but got here with nothing else to do.);
+			Hangup();
+		}
+		&do-CHECKSCHEDULE(0);
+	}
+
+	return;
+}
+
+macro do-getGETDOMESTICPROVIDERS(){
+	Set(result=${ODBC_GETDOMESTICPROVIDERS(${CUSTOMERSNAME})});
+	Set(DOMESTIC_PROVIDER1=${CUT(result,\,,1)});
+	Set(DOMESTIC_PROVIDER2=${CUT(result,\,,2)});
+	Set(DOMESTIC_PROVIDER3=${CUT(result,\,,3)});
+
+	if(${LEN(${DOMESTIC_PROVIDER1})}==0){
+		Set(DOMESTIC_PROVIDER1=anveo);
+	}
+	if(${LEN(${DOMESTIC_PROVIDER2})}==0){
+		Set(DOMESTIC_PROVIDER2=voipms);
+	}
+	if(${LEN(${DOMESTIC_PROVIDER3})}==0){
+		Set(DOMESTIC_PROVIDER3=voipinnovations);
+	}
+	return;
+}
+
+macro do-SCHEDULEUSER(){
+	Set(IAM_FORWARDING_SCHEDULE=1);
+	Set(ScheduleLen=${LEN(${DB_SCHEDULEUSER})});
+
+	if("${DB_SCHED_PLAYMUSICONTRANSFER}"="1"){
+		Set(play_music=m(${CUSTOMERSNAME}_${CHANNEL(language)}));
+	}
+
+	&do-getGETDOMESTICPROVIDERS();
+
+	if(${ScheduleLen}=10 || ${ScheduleLen}=11){
+		// 01 Domestic with 10 digits or 11 with ";"
+		Set(phone1=${CUT(DB_SCHEDULEUSER,;,1)});
+		jump ${phone1}@ivr-${CUSTOMERSNAME};
+	}
+	else if(${ScheduleLen}=21 || ${ScheduleLen}=22){
+		// has 2 10 digits numbers to forward to
+		Set(phone1=${CUT(DB_SCHEDULEUSER,;,1)});
+		Set(phone2=${CUT(DB_SCHEDULEUSER,;,2)});		
+		if(${LEN(${phone1})}=10 & ${LEN(${phone2})}=10){
+			if(${DOMESTIC_PROVIDER1}==anveo){
+				Set(provider=${DOMESTIC_PROVIDER1});Dial(SIP/0EDILS1${phone1}@${DOMESTIC_PROVIDER1}&SIP/0EDILS1${phone2}@${DOMESTIC_PROVIDER1},60,r);
+				Set(provider=${DOMESTIC_PROVIDER2});Dial(SIP/0EDILS1${phone1}@${DOMESTIC_PROVIDER2}&SIP/0EDILS1${phone2}@${DOMESTIC_PROVIDER2},60,r);				
+			}else{
+				Set(provider=${DOMESTIC_PROVIDER1});Dial(SIP/1${phone1}@${DOMESTIC_PROVIDER1}&SIP/1${phone2}@${DOMESTIC_PROVIDER1},60,r);
+				Set(provider=${DOMESTIC_PROVIDER2});Dial(SIP/1${phone1}@${DOMESTIC_PROVIDER2}&SIP/1${phone2}@${DOMESTIC_PROVIDER2},60,r);
+			}
+		}
+	}
+	else if(${ScheduleLen}=7 || ${ScheduleLen}=8){
+		// has 2 extentions with 3 digits or 2 extenstions with 4 digits and ";" 
+		Set(phone1=${CUT(DB_SCHEDULEUSER,;,1)});
+		Set(phone2=${CUT(DB_SCHEDULEUSER,;,2)});
+		Dial(SIP/${phone1}&SIP/${phone2},15,rt);
+		jump ${phone1}@ivr-${CUSTOMERSNAME};
+	}
+	else if(${ScheduleLen}=12){
+		// Allows international calls too  552126208893
+		jump 011${DB_SCHEDULEUSER}@ivr-${CUSTOMERSNAME};
+	}
+	else if(${ScheduleLen}=13){
+		// Allows international calls too  552126208893
+		jump 011${DB_SCHEDULEUSER}@ivr-${CUSTOMERSNAME};
+	}
+	else if(${ScheduleLen}=26){
+		// Allows international calls too
+		Set(phone1=${CUT(DB_SCHEDULEUSER,;,1)});
+		Set(phone2=${CUT(DB_SCHEDULEUSER,;,2)});
+		if(${LEN(${phone1})}=12 & ${LEN(${phone2})}=12){
+			Set(provider=anveo);Dial(SIP/011${phone1}@sbc.anveo.com&SIP/011${phone2}@sbc.anveo.com,60,rt);
+			Set(provider=voipms);Dial(SIP/011${phone1}@voipms&SIP/011${phone2}@voipms,60,rT);
+		}
+		// jump 011${phone1}@ivr-${CUSTOMERSNAME};
+	}
+	else if(${ScheduleLen}=24 || ${ScheduleLen}=25){
+		// Allow 1 10 digits and one 13 digits international
+		Set(phone1=${CUT(DB_SCHEDULEUSER,;,1)});
+		Set(phone2=${CUT(DB_SCHEDULEUSER,;,2)});
+		if(${LEN(${phone1})}=10 && ${LEN(${phone2})}=13){
+			Set(provider=anveo);Dial(SIP/1${phone1}@sbc.anveo.com&SIP/011${phone2}@sbc.anveo.com,60,rt);
+			Set(provider=voipinnovations);Dial(SIP/1${phone1}@voipinnovations&SIP/011${phone2}@voipinnovations,60,rt);
+		}else if(${LEN(${phone2})}=10 && ${LEN(${phone1})}=13){
+			Set(provider=anveo);Dial(SIP/1${phone2}@sbc.anveo.com&SIP/011${phone1}@sbc.anveo.com,60,rt);
+			Set(provider=voipinnovations);Dial(SIP/1${phone2}@voipinnovations&SIP/011${phone1}@voipinnovations,60,rt);
+		}
+	}
+
+	log(warning,NO SCHEDULE USER !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  !!!);
+
+	// no phone number or invalid phone number 
+	if("${DB_DISABLE_VM_RECORDING}"=="0"){
+                &do-VM(${DB_RECEPCIONIST_EXT},);
+        }
+	Hangup();
+	return;
+}
+
+macro do-CHECKSCHEDULE(forceexception){
+
+	&get-SCHEDULE(${DB_ACCOUNT},${DB_SCHEDULENAME});
+
+	if("${forceexception}" != "1" && (${LEN(${DB_SCHEDULEENABLED})}=0 || "${DB_SCHEDULEENABLED}"=="0")){
+		noop(SCHEDULE DISABLED !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  !!!);
+		return;
+	}
+
+	if(${LEN(${OVERRIDE})}<10){
+		OVERRIDE=0;
+	}
+
+	if("${forceexception}"=="1"){
+		ISOFFHOURS=1;
+		&DOAFTERHOURS(${DB_SCHEDULENAME});
+	}
+
+	if(${LEN(${DB_DEFAULTVM})}<3){
+		if("${DB_DEFAULTVM}"!="0"){
+			// Default VM BOX is less than 3 digits and also isn't 0(zero)!
+			&send-email(Error: no default mailbox for ${DB_ACCOUNT} mailbox=${DB_DEFAULTVM}, ${MAINSERVER});
+			Set(DB_DEFAULTVM=101);
+		}
+	}
+
+	if("${DB_HAS_OVERRIDE}"=="1"){
+		log(warning, ACCOUNT=${DB_ACCOUNT} DB_HAS_OVERRIDE=${DB_HAS_OVERRIDE} $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$);
+		// override
+		if("${DB_SCHED_PLAYATENDEDOR}"="1"){
+			&get-audio(${CUSTOMERSNAME},${DB_SCHED_ATENDEDOR_FILENAME});
+			if(${LEN(${ATENDEDOR_FILENAME})}>0){
+				Read(override_Options,${CUSTOMERSNAME}/${ATENDEDOR_FILENAME},1,,1,2);
+			}
+		}
+
+		if("${DB_SCHED_PLAYTRANSFERING}"="1" & "${override_Options}"!="*"){
+			Read(override_Options,transfering,1,,1,2);
+		}
+
+		if("${override_Options}"="*"){
+			&changeAfterhoursOverride();
+		}else{
+			&DORINGBEFORE();			
+			if("${LEN(${OVERRIDE})">="15"}){
+				log(warning, OVERRIDE SENDING TO jump ${OVERRIDE}@ivr-${CUSTOMERSNAME});
+				jump ${OVERRIDE}@ivr-${CUSTOMERSNAME};			
+			}else{
+				Dial(SIP/0EDILS1${OVERRIDE}@anveo,60,tr);
+				Dial(SIP/1${OVERRIDE}@voipinnovations,60,tr);
+				Dial(SIP/1${OVERRIDE}@voipms,60,tr);
+				Dial(SIP/1${OVERRIDE}@bulkvs,60,tr);
+			}
+		}
+		Hangup();
+	}
+	else if("${DB_CHECKTIMEZONE}"=="1"){
+		set(DIDLOCALTIME=0);
+		set(day=${STRFTIME(${EPOCH},${EDTTIME},%a)}); // The abbreviated weekday name according to the current locale.
+		day=${TOLOWER(${day})};
+		Set(result=${ODBC_GETSCHEDULETIME(${day},${CUSTOMERSNAME},${DB_SCHEDULENAME})});
+		if(${LEN(${result})}>0){
+			Set(DB_STARTTIME=${CUT(result,\,,2)});   
+			Set(DB_ENDTIME=${CUT(result,\,,3)});   
+			agi(getTimeZone.agi,${DB_TIMEZONE},${DB_STARTTIME},${DB_ENDTIME});
+		}
+	}
+
+	if("${ISOFFHOURS}"="1"){
+		&DOAFTERHOURS(${DB_SCHEDULENAME});
+	}
+	return;
+};
+
+macro DORINGBEFORE(){
+	if(${LEN(${DB_RINGBEFORESECONDS})} > 0 && "${DB_RINGBEFOREENABLED}"=="1"){
+		if(${DB_RINGBEFORESECONDS}>0){
+			Set(fieldcount=${FIELDQTY(DB_EXTRINGBEFORE,;)});
+			for(x=1;${x}<=${fieldcount};x=${x}+1){
+				Set(ext=${CUT(DB_EXTRINGBEFORE,\;,${x})});
+				if(${LEN(${ext})}==0) continue; 
+				if(${LEN(${extens})}>0){
+					Set(extens=${extens}&SIP/${CUSTOMERSNAME}${ext});
+				}else{
+					Set(extens=SIP/${CUSTOMERSNAME}${ext});
+				}
+				if(${x}=1 && ${LEN(${ext})}>=3){
+					Set(extens=SIP/${CUSTOMERSNAME}${ext});
+				}else if(${x}=2 && ${LEN(${ext})}>=3){
+					Set(extens=${extens}&SIP/${CUSTOMERSNAME}${ext});
+				}else if(${x}=3 && ${LEN(${ext})}>=3){
+					Set(extens=${extens}&SIP/${CUSTOMERSNAME}${ext});
+				}else if(${x}=4 && ${LEN(${ext})}>=3){
+					Set(extens=${extens}&SIP/${CUSTOMERSNAME}${ext});
+				}
+				//  discard after 3 extensions
+			}
+			//  after putting all extensions together
+			noop(EXTENS RING BEFORE = ${extens});
+			if(${LEN(${extens})}>0){
+				Dial(${extens},${DB_RINGBEFORESECONDS},Tt);
+			}
+		}
+	}
+	return;
+}
+
+macro DOAFTERHOURS(schedulename){
+	log(warning,#################   ISOFFHOURS FOR ${CUSTOMERSNAME}  #####################);
+
+	local getScheduleCounter = 0;
+	get-SCHEDULE_again:
+
+	if("${DB_PLAYAFTERHOURS}"=="" & ${getScheduleCounter}==0){
+		// This is only needed if there is no schedule created on db.
+		getScheduleCounter = ${INC(getScheduleCounter)}; // increment
+		// Try again maybe it hasn't ran up to this point. 
+		&get-SCHEDULE(${DB_ACCOUNT},${DB_SCHEDULENAME});
+		if("${DB_PLAYAFTERHOURS}"==""){
+			// Still no DB_PLAYAFTERHOURS
+			Set(DB_PLAYAFTERHOURS=0);
+			&send-email(no PLAYAFTERHOURS for ${DB_ACCOUNT}, ${MAINSERVER});
+		}else{
+			goto get-SCHEDULE_again; // now it'll work
+		}
+	}
+
+	&DORINGBEFORE();
+
+	set(day=${STRFTIME(${EPOCH},${EDTTIME},%a)}); // The abbreviated weekday name according to the current locale.
+	day=${TOLOWER(${day})};
+
+	if("${DB_PLAYAFTERHOURS}"="1" || "${DB_SCH_EXCEPTION_PLAYAFTERHOURS}"="1" || "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+		if("${DB_SCH_EXCEPTION_PLAYFILE}"=="1" && ${LEN(${DB_SCH_EXCEPTION_PLAYFILE_NAME})}>0 && "${DB_SCH_EXCEPTION_PLAYAFTERHOURS}"=="1"){
+			// we have to play an audio file for an exception
+			&get-audio(${CUSTOMERSNAME},${DB_SCH_EXCEPTION_PLAYFILE_NAME});
+			Playback(${ASTDATADIR}/sounds/${CHANNEL(language)}/${CUSTOMERSNAME}/${ATENDEDOR_FILENAME});
+			if("${DB_SCH_EXCEPTION_HANGUP_AFTER_PLAYAFTERHOURS}"=="1"){
+				Hangup();
+			}			
+		}
+		else if("${DB_PLAYHOLIDAYOFFHOURS}"=="1" || "${DB_PLAYAFTERHOURS}"="1"){
+			if("${holiday}"=="natal" || "${holiday}"=="newyear" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+			//  natal or new year 
+			if("${DB_PLAYHOLIDAYGREETING}"=="1" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+				// if play greeting and time off play all together
+				Playback(christimasAndOffHours);
+			}
+			else if("${DB_PLAYHOLIDAYGREETING}"=="1"){
+				Playback(christimas);
+			}
+			else if("${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+				Playback(EndOfYearHolidaysOffHours);
+			}
+		}else if ("${holiday}"=="thanksgiving" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+			noop( $$$  IT'S THANKSGIVING DAY  $$$$$$$$$$$$$$$$$$);
+			if("${DB_PLAYHOLIDAYGREETING}"=="1" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+				Playback(holiday);
+			}
+			else if("${DB_PLAYHOLIDAYGREETING}"=="1"){
+				Playback(${CUSTOMERSNAME}/thanksgiving);
+			}
+		}else if ("${holiday}"=="labor" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+			noop( $$$  IT'S LABOR DAY  $$$$$$$$$$$$$$$$$$);
+			if("${DB_PLAYHOLIDAYGREETING}"=="1" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+				Playback(holiday);
+			}
+			else if("${DB_PLAYHOLIDAYGREETING}"=="1"){
+				Playback(${CUSTOMERSNAME}/labor);
+			}
+		}else if ("${holiday}"=="easter" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+			noop( $$$  IT'S EASTER WEEKEND OR GOOD FRIDAY  $$$$$$$$$$$$$$$$$$);
+			
+			if("${DB_PLAYHOLIDAYGREETING}"=="1" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+				Playback(holiday);
+			}
+			else if("${DB_PLAYHOLIDAYGREETING}"=="1"){
+				Playback(${CUSTOMERSNAME}/easter);
+			}
+		}else if("${DB_PLAYHOLIDAYGREETING}"=="1" && ${LEN(${holiday})}>0 && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+			Playback(holiday);
+		}
+
+		if(${LEN(${DB_EMERGENCYDIGIT})}=0){
+			Set(DB_EMERGENCYDIGIT=0);
+		}
+
+		get_AfterHours_Options:
+		// Get afterhours file name
+		Set(resultAftName=${ODBC_GETAFTERHOURSFILENAME(${CUSTOMERSNAME},${schedulename})});
+		Set(LOCAL(AfterHours_Options)=);
+		if(${ODBCROWS} == 1){
+			Set(AfterHoursFileName=${CUT(resultAftName,\,,1)});
+
+			if(${LEN(${AfterHoursFileName})}>0"){
+				&get-audio(${CUSTOMERSNAME},${AfterHoursFileName});
+				Read(AfterHours_Options,${CUSTOMERSNAME}/${ATENDEDOR_FILENAME},1,,1,2);
+			}else{
+				Read(AfterHours_Options,${CUSTOMERSNAME}/afterhours,1,,1,2);
+			}
+		}else{
+			Read(AfterHours_Options,${CUSTOMERSNAME}/afterhours,1,,1,2);
+		}
+
+		if(${LEN(${AfterHours_Options})}==0){
+			if(${LEN(${DB_PLAYAFTERHOURS_NOOPTION})}==0){
+				Set(DB_PLAYAFTERHOURS_NOOPTION="vm");
+			}
+			if(${DB_PLAYAFTERHOURS_NOOPTION}=="vm"){
+				if("${DB_DEFAULTVM}"!="0"){
+					&do-VM(${DB_DEFAULTVM},);
+				}else{
+					&send-email(no Default VM for ${DB_ACCOUNT}, ${MAINSERVER});
+				}			
+			}else{
+				// Don't go to VM so go to a phone
+				&do-SCHEDULEUSER();
+			}
+			Hangup();  // go no further
+			}
+			else if("${AfterHours_Options}"="*"){
+				&changeAfterhoursOverride();
+			}
+			else if("${AfterHours_Options}"="**"){
+				&RequestToDialOut();
+			}
+		else if("${AfterHours_Options}"=="${DB_EMERGENCYDIGIT}"){
+			&do-SCHEDULEUSER();
+			Hangup();  // go no further
+		}
+
+		else if("${AfterHours_Options}"="5"){ 
+			// Portugues
+			Set(CHANNEL(language)=pt);
+			if("${holiday}"=="natal" || "${holiday}"=="newyear"){
+				if("${DB_PLAYHOLIDAYGREETING}"=="1" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+					// if play greeting and time off play all together
+					Playback(christimasAndOffHours);
+				}
+				else if("${DB_PLAYHOLIDAYGREETING}"=="1"){
+					Playback(christimas);
+				}
+				else if("${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+					Playback(EndOfYearHolidaysOffHours);
+				}
+			}
+			goto get_AfterHours_Options;
+		}
+		else if("${AfterHours_Options}"="6"){  
+			// SPANISH
+			Set(CHANNEL(language)=es);
+			if("${holiday}"=="natal" || "${holiday}"=="newyear"){
+				if("${DB_PLAYHOLIDAYGREETING}"=="1" && "${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+					// if play greeting and time off play all together
+					Playback(christimasAndOffHours);
+				}
+				else if("${DB_PLAYHOLIDAYGREETING}"=="1"){
+					Playback(christimas);
+				}
+				else if("${DB_PLAYHOLIDAYOFFHOURS}"=="1"){
+					Playback(EndOfYearHolidaysOffHours);
+				}
+			}
+			goto get_AfterHours_Options;
+		}else{
+			if("${DB_DEFAULTVM}"!="0"){
+				&do-VM(${DB_DEFAULTVM},);
+			}
+			Hangup();  // go no further
+		}
+			&send-email(Got here because we've failed doing phone forward for account ${DB_ACCOUNT} AfterHours_Options=${AfterHours_Options}, ${MAINSERVER});
+		}
+	}
+
+	if("${DB_SCHED_PLAYATENDEDOR}"="1"){
+		Set(LOCAL(ATENDEDOR_DIRECTORY)=${CUSTOMERSNAME});
+		Set(LOCAL(ATENDEDOR_FILENAME)=atendedor);
+		Set(result=${ODBC_GETATENDEDOR_FILE(${CUSTOMERSNAME},${Var_TO:-10})});
+		if(${ODBCROWS} == 1){
+			Set(LOCAL(ATENDEDOR_DBFILENAME)=${CUT(result,\,,1)});
+			Set(LOCAL(ATENDEDOR_DBFOLDER)=${CUT(result,\,,2)});
+			if(${LEN(${ATENDEDOR_DBFOLDER})}>0){
+				if("${TOLOWER(${ATENDEDOR_DBFOLDER})}" != "default"){
+					ATENDEDOR_DIRECTORY=${CUSTOMERSNAME}/${ATENDEDOR_DBFOLDER};
+				}
+			}
+			if(${LEN(${ATENDEDOR_DBFILENAME})}>0){
+				if("${TOLOWER(${ATENDEDOR_DBFILENAME})}" != "default"){
+					ATENDEDOR_FILENAME=${ATENDEDOR_DBFILENAME};
+				}
+			}
+		}else{
+			&send-email(SUPPOSED TO PLAY FILE BUT FILE NAME NOT IN DB, ${CUSTOMERSNAME});
+			log(warning, SUPPOSED TO PLAY FILE BUT FILE NAME NOT IN DB);
+		}
+
+		Read(option,${ATENDEDOR_DIRECTORY}/${ATENDEDOR_FILENAME},3,,1,2);
+
+		if("${DB_PLAYPRIVACY}"=="1")Playback(monitorrecorded);
+
+		Hangup();
+	}
+	else{
+		&do-SCHEDULEUSER();
+		//  shouldn't go any further
+		&send-email(shouldn't go any further, ${CUSTOMERSNAME} ${CONTEXT});
+		Hangup();
+	}
+	return;
+}
+
+macro do-VM(o_VMBOX,o_VMSTATUS){
+	Set(LOCAL(VM_BOX)=${o_VMBOX});
+	if(${LEN(${DB_DEFAULTVM})}>0 & ${LEN(${o_VMBOX})}=0){
+		VM_BOX=${DB_DEFAULTVM};
+	}else if(${LEN(${DB_DEFAULTVM})}==0 & ${LEN(${o_VMBOX})}=0){
+		VM_BOX=${DB_RECEPCIONIST_EXT};
+	}
+	Set(result=${ODBC_GETSKIPVMGREETING(${CUSTOMERSNAME},VM-${CUSTOMERSNAME},${VM_BOX})});
+	if(${ODBCROWS}==1){
+		Set(DB_SKIP_VM_GREETING=${CUT(result,\,,1)});
+		Set(DB_FORCEGREETINGSTATUS=${CUT(result,\,,2)});
+		Set(DB_VM_FILENAME=${CUT(result,\,,3)});
+		Set(DB_PLAY_VM_FILE=${CUT(result,\,,4)});
+	}
+ 
+	Set(o_forcegreetingstatus=na);
+	if(${LEN(${DB_FORCEGREETINGSTATUS})}>0){
+		o_forcegreetingstatus=${DB_FORCEGREETINGSTATUS};
+	}
+
+	Set(o_skipgreeting=);
+	if("${DB_SKIP_VM_GREETING}"=="Y"){
+		Set(o_skipgreeting=s);
+	}
+
+	if("${o_skipgreeting}"!="s"){
+		if("${o_forcegreetingstatus}"=="na"){
+			Set(o_forcegreetingstatus=u);
+		}else if("${o_forcegreetingstatus}"=="s"){
+			Set(o_forcegreetingstatus=);
+		}
+	}
+	if("${o_forcegreetingstatus}"=="na"){
+		Set(o_forcegreetingstatus=u);
+	}
+
+	Set(__resultVM=${VM_BOX});
+	Set(CDR(peeranswered)=${VM_BOX});
+
+	if(${LEN(${DB_VM_FILENAME})}>0 && "${DB_PLAY_VM_FILE}"=="1"){
+		&get-audio(${CUSTOMERSNAME},${DB_VM_FILENAME});
+	}
+
+	if(${LEN(${resultVM})}>0 && (${LEN(${resultVM})}==3 || ${LEN(${resultVM})}==4)){
+		if(${VM_INFO(${resultVM}@VM-${CUSTOMERSNAME},exists)}){
+			StopMixMonitor();  // stop before voicemail begins
+			if(${LEN(${DB_VM_FILENAME})}>0 && "${DB_PLAY_VM_FILE}"=="1"){
+				local lang=${CHANNEL(language)};
+				Playback(${CUSTOMERSNAME}/${ATENDEDOR_FILENAME});
+			}
+			VoiceMail(${resultVM}@VM-${CUSTOMERSNAME},${o_skipgreeting}${o_forcegreetingstatus});
+		}else{
+			log(warning,$$$$$$$$$$$$$$$$$$$$ VM does NOT exist for ${resultVM} in ${CUSTOMERSNAME});
+			Playback(vm-goodbye);
+		}
+	}else if("${resultVM}"=="0"){
+		noop(Voicemail box exists o_skipgreeting=${o_skipgreeting} o_forcegreetingstatus=${o_forcegreetingstatus} DB_FORCEGREETINGSTATUS=${DB_FORCEGREETINGSTATUS} !!);
+		StopMixMonitor();  // stop before voicemail begins
+		VoiceMail(${resultVM}@VM-${CUSTOMERSNAME},${o_skipgreeting}${o_forcegreetingstatus});
+	}
+	else{
+		noop( $$$$$$$$$$$$$$$$$$$$  VM does NOT exist for ${resultVM} in ${DB_ACCOUNT});
+		Playback(vm-goodbye);
+	}
+
+	catch h {
+		if("${VMSTATUS}"=="SUCCESS" & "${ISOFFHOURS}"=="1"){
+		Set(smsaft=${ODBC_GET_SEND_SMS_AFTERHOURS(${CUSTOMERSNAME},${DB_PROFILE_NAME})});
+			if(${ODBCROWS}==1){
+				// DB_DEFAULTVM
+				Set(LOCAL(DB_VM_SEND_SMS_AFTERHOURS)=${CUT(smsaft,\,,1)});
+				if("${DB_VM_SEND_SMS_AFTERHOURS}"=="1"){
+					Set(LOCAL(DB_VM_SEND_SMS_TO_PHONES)=${CUT(smsaft,\,,2)});
+					Set(LOCAL(SMS_NUMBER1)=${CUT(DB_VM_SEND_SMS_TO_PHONES,\;,1)});
+					Set(LOCAL(SMS_NUMBER2)=${CUT(DB_VM_SEND_SMS_TO_PHONES,\;,2)});
+					set(CallTime=${STRFTIME(${EPOCH},America/New_York,%m/%d/%y-%r)});
+				        Set(timeEncoded=${URIENCODE(${CallTime})});
+					if(${LEN(${SMS_NUMBER1})}=10){
+						agi(sendSMS.pl,1${SMS_NUMBER1:-10},"Voicemail To ${CUSTOMERSNAME} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+						if(${LEN(${SMS_NUMBER2})}=10){
+							agi(sendSMS.pl,1${SMS_NUMBER2:-10},"Voicemail To ${CUSTOMERSNAME} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+						}
+					}
+				}
+			}
+		}
+
+		noop(hhhhhhhhhhhhhhhhhhhhh ${CUSTOMERSNAME} hhhhhhhhhhhhhhhhhhhhhhhhhhhh);
+		&do-hangup();
+	}
+	
+	&do-hangup();
+	return;
+}
+
+macro DOFWDTOPHONE(fowardSequence){
+	if("${fowardSequence}"="" | "${fowardSequence}"="0" )
+		Set(fowardSequence=1);
+	Set(forwardedToPhone=yes);
+	if(${LEN(${DB_PLAYMUSICTRANSFER})}=0){
+		Set(DB_PLAYMUSICTRANSFER=0);
+	}
+
+	Set(fwd=${DB_FWDPH${fowardSequence}});
+	Set(ringtime=${DB_FWDRING${fowardSequence}});
+
+	if((${LEN(${fwd})}>=${EXTMINISIZE} | (${LEN(${fwd})}=10 | ${LEN(${fwd})}=15))){
+		if("${fwd}"="${DB_DID}"){
+			log(WARNING,####################### LOOPBACK ON account ${CUSTOMERSNAME} calling ${fwd} #############################);
+			&send-email(Loopback detected account ${CUSTOMERSNAME},WARNING);
+			Hangup();
+		}
+		else{
+			log(WARNING,####### FORWARDING Sequence=${fowardSequence} #####);
+			if("${DB_ACCOUNT_ALLOW_SMS_OUT}"=="1"){
+				&DO-SENDSMS(${fwd},,1);
+			}
+			if("${DB_SERVER}"=="${SYSTEMNAME}"){
+				jump ${fwd}@ivr-${CUSTOMERSNAME};
+			}
+			else{
+				// remote server
+				Dial(SIP/${DB_DID}@${DB_SERVERADD},30,Tt);
+			}
+		}
+	}
+	catch h {
+		log(warning,  NO PLACE TO SEND THIS CALL hhhhhhhhhhhhhhhhhhhhhhhh hhhhhhhhhhhhhhhhhhhhhhhhhhhh);
+		&do-hangup();
+	}
+	return;
+}
+
+macro checklocalCNAM(cnamphonenumber){
+	// try to get CNAM from local DB
+
+	if("${CUSTOMERSNAME}"=="VHC" || "${CUSTOMERSNAME}"=="IPGIRLO"){
+		return;
+	}
+
+	Set(Original_CNAM=${CALLERID(name)});
+
+	if(${LEN(${Original_CNAM})}>2 || "${Original_CNAM}"="UNKNOWN" | "${Original_CNAM}"="RESTRICTED"){
+		//  Already has CNAM or is UNKNOWN
+		return;
+	}
+
+	if(${LEN(${CALLERID(num)})}>10){
+		// international number
+		if("${CALLERID(num):0:2}"=="11" || "${CALLERID(num):0:2}"=="21"){
+			// Sao Paulo, Rio
+			return;
+		}else if(${LEN(${CALLERID(num)})}>11){
+			return;
+		}
+	}else{
+		if("${CALLERID(num):0:2}"=="11"){
+			return;
+		}
+	}
+
+	Set(INCOMING_NUM=1${FILTER(0-9,${CALLERID(num):-10})});
+	if(${LEN(${INCOMING_NUM})}>=11){  //  1 (US code) + 10
+		// must be a number with 10 digits
+		Set(CNAM_result=${ODBC_GETCNAM(${INCOMING_NUM:-10})});
+		Set(CALLER_NAME=${CUT(CNAM_result,\,,1)});
+
+		if(${LEN(${CNAM_result})}>0 && "${CALLER_NAME}"!="UNKNOWN" && "${CALLER_NAME}"!="RESTRICTED"){
+			// found CNAM in DB
+			// Set(CALLER_NAME=${CUT(CNAM_result,\,,1)});
+			if(${LEN(${CALLER_NAME})}>0){
+				Set(CALLERID(name)=${CALLER_NAME});
+			}
+		}else{
+			Set(TWILLO=0);
+			if("${TWILLO}"=="1"){
+				Set(AGI_OPENCNAME_RESULT=);
+				agi(get-twillocnam.pl,${INCOMING_NUM});
+				Set(CNAM=${AGI_OPENCNAME_RESULT});
+				Set(CALLER_NAME=${REPLACE(AGI_OPENCNAME_RESULT,\,,+)});
+			}else {
+				Set(AGI_OPENCNAME_RESULT=);
+				//     removed because it was causing channel locks
+				//     agi(get-opencnam.pl,${INCOMING_NUM});
+				//     Set(CALLER_NAME=${REPLACE(AGI_OPENCNAME_RESULT,\,,+)});
+			}
+
+			if(${LEN(${CALLER_NAME})}>0){
+				Set(CALLERID(name)=${CALLER_NAME});
+				Set(ODBC_ADDCNAM()=${CALLER_NAME},${INCOMING_NUM},${cnamphonenumber},${CUSTOMERSNAME});
+			}
+		}
+	}
+	return;
+}
+
+macro DO-SENDSMS(phonenumber1,phonenumber2,isforward){
+	Set(LOCAL(phonenumber1)=${FILTER(0-9,${phonenumber1})});
+	Set(LOCAL(phonenumber2)=${FILTER(0-9,${phonenumber2})});
+
+	if(${LEN(${phonenumber1})}!=10 && ${LEN(${phonenumber1})}!=0){   // it could be zero length if it has "DB_SEND_SMS_ALWAYS_TONUMBRS"
+		return;
+	}
+
+        if("${DB_ACCOUNT_ALLOW_SMS_OUT}"!="1"){
+		return;
+	}
+
+	set(CallTime=${STRFTIME(${EPOCH},America/New_York,%m/%d/%y-%r)});
+	Set(timeEncoded=${URIENCODE(${CallTime})});
+	Set(LOCAL(smsresult)=${ODBC_GETDIDSMS(${DB_DID})});
+	if(${LEN(${smsresult})}>0){
+		Set(DB_SEND_SMS_ON_FWD=${CUT(smsresult,\,,1)});
+		Set(DB_SEND_SMS_TONUMBRS=${CUT(smsresult,\,,2)});
+		Set(DB_SEND_SMS_ALWAYS_TONUMBRS=${CUT(smsresult,\,,3)});
+		Set(DB_SEND_SMS_MESSAGE=${CUT(smsresult,\,,4)});
+		Set(DB_SEND_SMS_COMPANY=${CUT(smsresult,\,,5)});
+		Set(DB_SEND_SMS_MESSAGE=${REPLACE(DB_SEND_SMS_MESSAGE, ,+)});
+		Set(DB_SEND_SMS_COMPANY=${REPLACE(DB_SEND_SMS_COMPANY, ,+)});
+		
+		if(${LEN(${phonenumber1})}==0){
+			// did not send a number to sms
+			if(${LEN(${DB_SEND_SMS_ALWAYS_TONUMBRS})}>=21){
+				// multiple numbers
+				Set(LOCAL(SMS_NUMBER1)=${CUT(DB_SEND_SMS_ALWAYS_TONUMBRS,\;,1)});
+				Set(LOCAL(SMS_NUMBER2)=${CUT(DB_SEND_SMS_ALWAYS_TONUMBRS,\;,2)});
+				Set(LOCAL(SMS_NUMBER1)=${FILTER(0-9,${SMS_NUMBER1})});
+				Set(LOCAL(SMS_NUMBER2)=${FILTER(0-9,${SMS_NUMBER2})});
+								
+				if("${SMS_NUMBER1}"=="${SMS_NUMBER2}"){
+					// repeating same number
+					agi(sendSMS.pl,1${SMS_NUMBER1:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+				}else{
+					if(${LEN(${SMS_NUMBER1})}==10){
+						// Set(NEXMO_Result=${CURL(https://portal.bulkvs.com/api/v1.0/messageSend" -H  "accept: application/json" -H  "Content-Type: application/json" -H "Authorization:
+						// Basic ZWRpbHNvbmFtYXJhbDo0OGI4OTk5MWQxMmU5NzFiZmJhMmE3M2JmNTAzMDQ0Yw==" -d '
+						// {"From": "14074951300","To": ["${SMS_NUMBER2:-10}"],"Message": "Call+To+${DB_SEND_SMS_COMPANY}+is+being+transfed+Caller%3A+${CALLERID(num)}+${DB_SEND_SMS_MESSAGE}+Date%3A+${timeEncoded}"}')});
+						agi(sendSMS.pl,1${SMS_NUMBER1:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+					}
+					if(${LEN(${SMS_NUMBER2})}==10){
+                                                agi(sendSMS.pl,1${SMS_NUMBER2:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+					}
+				}
+			}else if(${LEN(FILTER(0-9,${DB_SEND_SMS_ALWAYS_TONUMBRS}))}==10){ //  Allow only 10 digits 
+				agi(sendSMS.pl,1${DB_SEND_SMS_ALWAYS_TONUMBRS:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+			}
+			if("${DB_SEND_SMS_ON_FWD}"=="1"){
+				if(${LEN(FILTER(0-9,${}))} == 10){
+					log(WARNING, GOT TO FIX THIS IF YOU WANT TO SEND SMS ON FORWARD);					
+				}
+			}
+		}else if("${DB_SEND_SMS_ON_FWD}"=="1" && ${isforward}==1){
+			if(${LEN(${DB_SEND_SMS_TONUMBRS})}>=10){
+				Set(LOCAL(SMS_NUMBER1)=${CUT(DB_SEND_SMS_TONUMBRS,\;,1)});
+				Set(LOCAL(SMS_NUMBER2)=${CUT(DB_SEND_SMS_TONUMBRS,\;,2)});
+				if("${phonenumber1}"!="${SMS_NUMBER1}" && "${phonenumber1}"!="${SMS_NUMBER2}"){
+					agi(sendSMS.pl,1${phonenumber1:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+					//Set(NEXMO_Result=${CURL(https://rest.nexmo.com/sms/json?api_key=e5766b11&api_secret=537d818a&from=14074108080&to=1${phonenumber1:-10}&text=Call+To+${DB_SEND_SMS_COMPANY}+is+being+transfered+Caller%3A+${CALLERID(num)}+${DB_SEND_SMS_MESSAGE}+Date%3A+${timeEncoded} )});
+				}
+				if(${LEN(${SMS_NUMBER1})}==10){
+					agi(sendSMS.pl,1${SMS_NUMBER1:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+					//Set(NEXMO_Result=${CURL(https://rest.nexmo.com/sms/json?api_key=e5766b11&api_secret=537d818a&from=14074108080&to=1${SMS_NUMBER1:-10}&text=Call+To+${DB_SEND_SMS_COMPANY}+is+being+transfered+Caller%3A+${CALLERID(num)}+${DB_SEND_SMS_MESSAGE}+Date%3A+${timeEncoded} )});
+				}
+				if(${LEN(${SMS_NUMBER2})}==10){
+					agi(sendSMS.pl,1${SMS_NUMBER2:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+					//Set(NEXMO_Result=${CURL(https://rest.nexmo.com/sms/json?api_key=e5766b11&api_secret=537d818a&from=14074108080&to=1${SMS_NUMBER2:-10}&text=Call+To+${DB_SEND_SMS_COMPANY}+is+being+transfered+Caller%3A+${CALLERID(num)}+${DB_SEND_SMS_MESSAGE}+Date%3A+${timeEncoded} )});
+				}
+			}
+			else{
+				agi(sendSMS.pl,1${phonenumber1:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+				// Set(NEXMO_Result=${CURL(https://rest.nexmo.com/sms/json?api_key=e5766b11&api_secret=537d818a&from=14074108080&to=1${phonenumber1:-10}&text=Call+To+${DB_SEND_SMS_COMPANY}+is+being+transfered+Caller%3A+${CALLERID(num)}+${DB_SEND_SMS_MESSAGE}+Date%3A+${timeEncoded})});
+			}
+		}else if(${LEN(${phonenumber1})}==10){
+			agi(sendSMS.pl,1${phonenumber1:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+			if(${LEN(${phonenumber2})}==10){
+				agi(sendSMS.pl,1${phonenumber2:-10},"Call To ${DB_SEND_SMS_COMPANY} from:${CALLERID(name)} ${CALLERID(num)}, Time:${CallTime}");
+			}
+		}
+	}
+	return;
+}
+
+macro do-FWD_TO_ENTRY_EXT(){
+	if(${LEN(${DB_MAINEXTEN})}==0 || ${LEN(${DB_SERVERADD})}==0 || ${LEN(${DB_SERVER})}==0){
+		&send-email(missing data on DB call to ${Var_TO}, ${MAINSERVER});
+	}
+
+		Set(DB_MAINEXTEN=${TOUPPER(${DB_MAINEXTEN})});
+		//if(${DB_SERVER}=${MAINSERVER}){
+		if(${DB_SERVER}!=${MAINSERVER}){
+			Dial(SIP/${DB_MAINEXTEN}@${DB_SERVERADD});
+		}
+			//  call to this server
+			//  take customer's name off extension
+			//  extensionSize = ${LEN(${CUSTOMERSNAME})};
+			if(${DB_MAINEXTEN:-4}==9000){
+				//  TOUCHBRAZIL
+				jump 9000@ivr-${CUSTOMERSNAME};
+			}
+
+			Set(LOCAL(menuExtension)=${FILTER(0-9,${DB_MAINEXTEN:-4:4})});   // Filter off all characters to avoid possible hack
+			//if(${LEN(${menuExtension})}>0){
+			if(${LEN(${menuExtension})}==0){
+				return;
+			}
+			// See if this call is for the same account this DID belongs to.
+			Set(hasCompany=${REGEX("^${CUSTOMERSNAME}" ${DB_MAINEXTEN})});
+			if("${hasCompany}"=="1"){
+				&do-CUSTOM-MENU();
+			}else{
+				// Hmmm menuExtension doesn't have company in it.
+				// This could be an attack or
+				// maybe it's an internal forward like utech100 => facebrasil100
+				//
+				// Get company name from DB_MAINEXTEN
+				Set(LOCAL(companyName)=${FILTER(a-zA-Z,${DB_MAINEXTEN})});
+				// Check DB for company name
+				Set(result=${ODBC_GET_ISCUSTOMER(${companyName})});
+				if(${LEN(${result})}==0){
+					log(WARNING, ************  COULD NOT FIND COMPANY NAME in mainExtension);
+					return;
+				}
+				Set(isCustomer=${CUT(result,\,,2)});
+				if("${isCustomer}"=="0"){
+					log(WARNING, ************   FOUND COMPANY BUT IT'S DISABLED);log(WARNING, ************   FOUND COMPANY BUT IT'S DISABLED);
+					Playtones(congestion);Playtones(congestion);
+					Hangup();
+				}else{
+					// found the company assuming it's a forward
+					// send it there
+					Set(companyName=${TOUPPER(${companyName})});
+					&do-CUSTOM-MENU();
+					//jump ${menuExtension}@ivr-${companyName};
+				}
+			}
+	Hangup();
+	return;
+};
+
+macro get-BASICVARS(accountcode){
+	if(${LEN(${accountcode})}=0){
+		return;
+	}
+	Set(result=${ODBC_BASICVARS(${accountcode})});
+	if(${LEN(${result})}=0){
+		noop($$$$$$$$$$$$$$$$$  ACCOUNT NOT FOUND  $$$$$$$$$$$$$$$$$$$$$$$$$$$$);
+                Playtones(congestion);
+                Hangup();
+	}
+
+	Set(DB_LOCALCHANNELS=${CUT(result,\,,1)});
+	Set(DB_INTERCHANNELS=${CUT(result,\,,2)});
+	Set(DB_MAINCALLERID=${CUT(result,\,,3)});
+	Set(DB_DIALPROV1=${CUT(result,\,,4)});
+	Set(DB_DIALPROV2=${CUT(result,\,,5)});
+	Set(DB_DIALPROV3=${CUT(result,\,,6)});
+	Set(DB_CANREQTODIALOUT=${CUT(result,\,,7)});
+	Set(DB_911PROVIDER=${CUT(result,\,,8)});
+	Set(DB_PASSORIGINALCALLERID=${CUT(result,\,,9)});
+	Set(DB_ISSERVICEENABLED=${CUT(result,\,,10)});
+	Set(DB_INTERPROVIDER1=${CUT(result,\,,11)});
+	Set(DB_INTERPROVIDER2=${CUT(result,\,,12)});
+	Set(DB_INTERPROVIDER3=${CUT(result,\,,13)});
+	Set(DB_MOBILERATE=${CUT(result,\,,14)});
+	Set(DB_HASMONITOR=${CUT(result,\,,15)});
+	Set(DB_LANGUAGEOPTION_EN=${CUT(result,\,,16)});
+	Set(DB_LANGUAGEOPTION_ES=${CUT(result,\,,17)});
+	Set(DB_LANGUAGEOPTION_PT=${CUT(result,\,,18)});
+	Set(DB_BRAZILPROVIDER1=${CUT(result,\,,19)});
+	Set(DB_BRAZILPROVIDER2=${CUT(result,\,,20)});
+	Set(DB_BRAZILPROVIDER3=${CUT(result,\,,21)});
+	Set(DB_CAN_FWD_ToBr_MOBILE=${CUT(result,\,,22)});
+	Set(DB_ACCOUNT_ALLOW_SMS_OUT=${CUT(result,\,,23)});
+	Set(DB_ACCOUNT_HAS_CRMEVENTS=${CUT(result,\,,24)});
+
+	if(${LEN(${DB_ISSERVICEENABLED})}>0) {
+		if(${DB_ISSERVICEENABLED}=0) {
+			&send-email(account ${accountcode} is disabled from caller ${CALLERID(num)}, ${MAINSERVER});
+			Playtones(congestion);
+			Playtones(congestion);
+			Playtones(congestion);
+			wait(3);
+			Hangup();
+		}
+	}
+	return;
+}
+
+macro get-MENU(accountcode){
+        Set(result=${ODBC_GETMENUOPTIONS(${DB_DID})});
+	if(${LEN(${result})} >0){
+		Set(DB_MENUOPT1=${CUT(result,\,,1)});   
+		Set(DB_MENUOPT2=${CUT(result,\,,2)}); 
+		Set(DB_MENUOPT3=${CUT(result,\,,3)}); 
+		Set(DB_MENUOPT4=${CUT(result,\,,4)}); 
+		Set(DB_MENUOPT5=${CUT(result,\,,5)}); 
+	}
+	return;
+}
+
+macro get-CALLERID_TOADD(optiondialed){
+	// change caller Id
+	Set(language=${CHANNEL(language)});
+	switch(${optiondialed}){
+	case 1:
+		Set(nametoAddToCalleriID=(${DB_MENUOPT${optiondialed}}-${language}));
+		break;
+	case 2:
+		Set(nametoAddToCalleriID=(${DB_MENUOPT${optiondialed}}-${language}));
+		break;
+	case 3:
+		Set(nametoAddToCalleriID=(${DB_MENUOPT${optiondialed}}-${language}));
+		break;
+	case 4:
+		Set(nametoAddToCalleriID=(${DB_MENUOPT${optiondialed}}-${language}));
+		break;
+	case 5:
+		Set(nametoAddToCalleriID=(${DB_MENUOPT${optiondialed}}-${language}));
+		break;
+	case 6:
+		Set(nametoAddToCalleriID=(${DB_MENUOPT${optiondialed}}-${language}));
+		break;
+	default:
+		Set(nametoAddToCalleriID=(${optiondialed})-${language});
+	}
+	return;
+}
+
+macro get-ISINTERNAL-PHONE(phone){
+	return;
+	Set(result=${ODBC_ISINTERNAL(${phone})});
+	if(${LEN(${result})}==0){return;}
+        Set(FROM_DB_MAINEXTENSION=${CUT(result,\,,1)});
+        Set(FROM_DB_CONTEXT=${CUT(result,\,,2)});
+        Set(FROM_DB_SERVER_NAME=${CUT(result,\,,3)});
+        Set(FROM_DB_SERVER_ADD=${CUT(result,\,,4)});
+        Set(FROM_DB_DID=${CUT(result,\,,5)});
+
+        if(${LEN(${FROM_DB_MAINEXTENSION})}>0 & ${LEN(${FROM_DB_CONTEXT})}>0){
+                // change callerid
+		if(${LEN(${FROM_DB_DIALOUTCALLERID})}>=10){
+			Set(CALLERID(num)=${FROM_DB_DIALOUTCALLERID});
+		}else{
+			Set(CALLERID(num)=${DB_MAINCALLERID});
+		}
+		Set(CALLERID(name)=${CUSTOMERSNAME});
+		if("${FROM_DB_SERVER_NAME}"=="${SYSTEMNAME}"){
+			if("${FROM_DB_MAINEXTENSION}"!="${FROM_DB_DID}"){
+				Set(__LOOPTRAP=yes);
+				if(${LEN(${LOOPCOUNTER})}==0){
+					Set(__LOOPCOUNTER=1);
+				}
+				else{
+					if(${LOOPCOUNTER}>=3){
+						&send-email(${CUSTOMERSNAME}, FROM_DB_MAINEXTENSION=${FROM_DB_MAINEXTENSION} LOOP COUNT);
+						log(WARNING, LOOP FROM ${FROM_DB_DID} counter=${LOOPCOUNTER});
+						// Hangup();
+					}else{
+						Set(__LOOPCOUNTER=${LOOPCOUNTER} + 1);
+					}
+				}
+				Var_TO=${FROM_DB_DID}; // Var_TO wil evaluated at isInternalPhone macro
+				SIPAddHeader(SIP_HEADER(TO):${FROM_DB_DID});
+				set(_INTERNALCALL_TO=${FROM_DB_MAINEXTENSION});
+				jump ${FROM_DB_MAINEXTENSION}@public;
+			}
+			else{
+				log(WARNING, LOOP FROM ${FROM_DB_DID});
+			}
+		}
+		else{
+			// remote server
+			Dial(SIP/${FROM_DB_MAINEXTENSION}@${FROM_DB_SERVER_ADD},30,Tt);
+		}
+		Hangup();
+	}
+	return;
+}
+
+macro get-DID_DATA(did){
+	Set(didLen=${LEN(${did})});
+	if(${didLen}=0){
+		&terminate("no did data");
+	}
+
+	Set(Var_TO=${did:-10});
+	if(${didLen}>=10 && ${didLen}<=12){
+		Set(DIDDATA_RESULT=${ODBC_DIDDATA(${did})});
+		if(${LEN(${DIDDATA_RESULT})}==0){
+			&terminate("no did data in DB");
+		}
+		AGI(/var/lib/asterisk/agi-bin/split_did_result.sh);
+	}else{
+		&terminate("LOOP ${FROM_DB_DID}");
+	}
+
+	if(${LEN(${DB_DID})}=0){
+		&terminate("get-did_data. DID not found");
+	}
+
+	if(${LEN(${DB_DIDACTIVE})}>0) {
+		if(${LEN(${DB_ACCOUNT})}>0) {
+			if(${DB_DIDACTIVE}=0) {
+				log(warning, DID NOT ACTIVE);
+				Hangup(21);
+			}
+		} else {
+			&terminate("get-did_data. Missing account for ${DB_DID}");
+		}
+	} else {
+		&terminate("get-did_data. Missing active flag for ${DB_DID}");
+	}
+
+	return;
+};
+
+macro get-ISALLOWEDCOUNTRY(extension){
+	code=${extension:3:2};
+	Set(result=${ODBC_ISALLOWEDCOUNTRY(${CUSTOMERSNAME},${code})});
+	if(${LEN(${result})}=0){
+		//  country not found 
+		//  try 3 digits now
+		code=${extension:3:3};
+		Set(result=${ODBC_ISALLOWEDCOUNTRY(${CUSTOMERSNAME},${code})});
+	}
+
+	if(${LEN(${result})}>0){
+		Set(DB_ISVALIDCOUNTRYCODE=${CUT(result,\,,1)});   
+	}
+	if("${DB_ISVALIDCOUNTRYCODE}"!="1"){
+		Playback(feature-not-avail-line);
+		Hangup();
+	}
+	return;
+}
+ 
+macro send-email(message, subject)
+{
+    // timestamp
+    Set(currentTime=${STRFTIME(${EPOCH},,%c)});
+
+    // destination
+    Set(destination1=edilsonamaral@gmail.com);
+
+    // build body & subject (avoid double-prepending)
+    Set(emailBody=${message} Current time:${currentTime});
+    Set(emailSubject=${subject});   
+
+    // expose to AGI via channel vars
+    Set(EMAIL_MSG=${emailBody});
+    Set(EMAIL_SUBJECT=${emailSubject});
+    Set(EMAIL_TO=${destination1});
+
+    // call AGI with NO args (important)
+    AGI(sendmail.pl);
+
+    log(warning, AGI status = ${AGISTATUS});
+    return;
+};
+
+macro get-SCHEDULE(CUSTOMER,SCHEDULENAME){
+	if("${SCHEDULENAME}"=="none"){
+		return;
+	}
+
+	set(LOCAL(day)=${STRFTIME(${EPOCH},${EDTTIME},%a)}); // The abbreviated weekday name according to the current locale.
+	day=${TOLOWER(${day})};
+	Set(result=${ODBC_GETSCHEDULE(${day},${CUSTOMER},${SCHEDULENAME},${Var_TO:-10})});
+
+	if(${LEN(${result})}>0){
+		Set(DB_SCHEDULEENABLED=${CUT(result,\,,1)});
+		if("${DB_SCHEDULEENABLED}"=="0"){
+				NOOP(SCHEDULE DISABLED);
+				return;
+		}
+		Set(ISOFFHOURS=${CUT(result,\,,2)});
+		Set(DB_DEFAULTVM=${CUT(result,\,,3)});
+		Set(DB_PLAYAFTERHOURS=${CUT(result,\,,4)});
+		Set(DB_SCHED_PLAYMUSICONTRANSFER=${CUT(result,\,,5)});
+		Set(OVERRIDE=${FILTER(0-9,${CUT(result,\,,6)})});
+		Set(DB_HAS_OVERRIDE=${CUT(result,\,,7)});
+		Set(DB_RINGBEFORESECONDS=${CUT(result,\,,8)});
+		Set(DB_EXTRINGBEFORE=${CUT(result,\,,9)});
+		Set(DB_RINGBEFOREENABLED=${CUT(result,\,,10)});
+		Set(DB_SCHED_PLAYTRANSFERING=${CUT(result,\,,11)});
+		Set(DB_SCHED_PLAYATENDEDOR=${CUT(result,\,,12)});
+		Set(DB_SCHEDULEUSER=${CUT(result,\,,13)});
+		Set(DB_EMERGENCYDIGIT=${CUT(result,\,,14)});
+		Set(DB_CHECKTIMEZONE=${CUT(result,\,,15)});
+		Set(DB_TIMEZONE=${CUT(result,\,,16)});
+		Set(DB_PLAYHOLIDAYOFFHOURS=${CUT(result,\,,17)});
+		Set(DB_PLAYHOLIDAYGREETING=${CUT(result,\,,18)});
+		Set(DB_BYPASSSCHEDULE=${CUT(result,\,,19)});
+		Set(DB_DISABLE_VM_RECORDING=${CUT(result,\,,20)});
+		Set(DB_PLAYAFTERHOURS_NOOPTION=${CUT(result,\,,21)});
+		Set(DB_SCHED_AFTERHOURS_FILENAME=${CUT(result,\,,22)});
+		Set(DB_SCHED_AFTERHOURS_FILE_HASH=${CUT(result,\,,23)});
+		Set(DB_SCHED_AFTERHOURS_FILE_DIRECTORY=${CUT(result,\,,24)});
+		Set(DB_SCHED_ATENDEDOR_FILENAME=${CUT(result,\,,25)});
+		Set(DB_SCHED_ATENDEDOR_FILE_HASH=${CUT(result,\,,26)});
+		Set(DB_SCHED_ATENDEDOR_FILE_DIRECTORY=${CUT(result,\,,27)});
+	}else{
+		// &send-email(calling ${Var_TO:-10},No result for ODBC_GETSCHEDULE:${CUSTOMERSNAME});
+	}
+	return;
+};
+
+macro get-ISCONGESTION(numberToDial)
+{
+	if(${LEN(${numberToDial})}>11)
+	{
+		// International call
+		GROUPNAME=${CUSTOMERSNAME}_INTERNATIONAL;
+		VOIPMAX=0${DB_INTERCHANNELS};
+		Set(GROUP()=${GROUPNAME});
+		Set(international_groupcount=0${GROUP_COUNT(${GROUPNAME})});
+
+		if(${GROUP_COUNT(${GROUPNAME})} > ${VOIPMAX})
+		{
+			Set(CDR(userfield)=CONGESTION);
+			competingExtension = ${DB(${GROUPNAME}/0$[${international_groupcount}])};
+			Set(subject=International channels used:${international_groupcount} ext:${competingExtension} is using the channel already!);
+			// &send-email(${subject} ext:${CALLERID(num)} in ${CUSTOMERSNAME} is calling ${numberToDial},Congestion account:${CUSTOMERSNAME});
+
+			Playback(simul-call-limit-reached&all-circuits-busy-now);
+			Playtones(congestion);  //  dont use busy() cmd to avoid callcentric's congestion message.
+			WaitExten(2);
+			Hangup(21); //21 = Call rejected
+		}
+		Set(DB(${GROUPNAME}/${international_groupcount})=${CALLERID(num)});
+	}
+	else {
+		// Local call
+		Set(GROUP(${CUSTOMERSNAME})=LOCAL_GROUP);
+		Set(local_groupcount=0${GROUP_COUNT(LOCAL_GROUP@${CUSTOMERSNAME})});
+
+		if(${local_groupcount}>0${DB_LOCALCHANNELS} && ${LEN(${DB_LOCALCHANNELS})} > 0)
+		{
+			// NoCDR();
+			Set(CDR(userfield)=CONGESTION);
+			Set(subject=Total channels used:${GROUP_COUNT(${OUTBOUND_GROUP@${CUSTOMERSNAME}})} maximum allowed ${DB_LOCALCHANNELS});
+			//&send-email(${subject} incoming from:${CALLERID(num)} calling ${numberToDial},Congestion account:${CUSTOMERSNAME});
+			Playtones(congestion);  //  dont use busy() cmd to avoid callcentric's congestion message.
+			WaitExten(2);
+			Hangup(21); //21 = Call rejected
+		}
+	}
+	return;
+};
+
+macro get-ACCESSPASSWORD(accountname){
+	// get password to change schedule
+	Set(LOCAL(result)=${ODBC_GETPHONEACCESS(${accountname})});
+	if("${result}"=""){
+		Playback(im-sorry-unable-to-connect-to-eng);
+		Hangup();
+	}
+	Set(FROM_DB_PHONEACCESSPASSWORD=${CUT(result,\,,1)});
+	Set(FROM_DB_AUTHORIZEDCALLERID1=${CUT(result,\,,2)});
+	Set(FROM_DB_AUTHORIZEDCALLERID2=${CUT(result,\,,3)});
+	Set(FROM_DB_DID=${CUT(result,\,,4)});
+	Set(FROM_DB_VALIDATEBYPASS=${CUT(result,\,,5)});
+	return;
+};
+
+macro get-DIALOUT(){
+	// get password to change schedule
+	Set(result=${ODBC_GETPHONEACCESS(${accountname})});
+	if("${result}"=""){
+		Playback(im-sorry-unable-to-connect-to-eng);
+		Hangup();
+	}
+	Set(FROM_DB_PHONEACCESSPASSWORD=${CUT(result,\,,1)});
+	Set(FROM_DB_AUTHORIZEDCALLERID1=${CUT(result,\,,2)});
+	Set(FROM_DB_AUTHORIZEDCALLERID2=${CUT(result,\,,3)});
+	Set(FROM_DB_DID=${CUT(result,\,,4)});
+	Set(FROM_DB_VALIDATEBYPASS=${CUT(result,\,,5)});
+	return;
+};
+
+macro get-PEERINFO(peer){
+        if(${LEN(${peer})}<3){
+                return;
+	}
+		Set(LOCAL(peertocheck)=${CUSTOMERSNAME}${peer});
+		Set(LOCAL(result)=${ODBC_GETPEERINFO(${peertocheck})});
+		Set(FROM_DB_TRANSFERTO=${CUT(result,\,,1)});
+		Set(FROM_DB_DIALOUTCALLERID=${CUT(result,\,,2)});
+		Set(FROM_DB_EXTENRINGTIME=${CUT(result,\,,3)});
+		Set(FROM_DB_PEERACTIVE=${CUT(result,\,,4)});
+		Set(FROM_DB_CANCALLBRCELLPHONE=${CUT(result,\,,5)});
+		Set(FROM_DB_ISSIP=${CUT(result,\,,6)});
+
+		if("${FROM_DB_PEERACTIVE}"="0" || ${LEN(${FROM_DB_PEERACTIVE})}==0){
+			log(WARNING,Peer not active! CHANNEL peername= ${CHANNEL(peername)} FROM_DB_PEERACTIVE= ${FROM_DB_PEERACTIVE});
+			Playtones(congestion);
+			Playtones(congestion);
+			Playtones(congestion);
+			if("${dialedFromMenu}"=="yes"){
+				return;  // So caller can pick another exten or option
+			}else{
+				wait(3);
+				Hangup();
+			}
+		}
+	return;
+};
+
+macro get-PEER911PROVIDER(peer){
+	if(${LEN(${peer})}>=3){
+		Set(result=${ODBC_GETPEER911PROVIDER(${peer})});		
+		if(${LEN(${result})}>0){
+			Set(DB_911PROVIDER=${CUT(result,\,,1)});
+			Set(DB_911CALLERID=${CUT(result,\,,2)});
+		}
+	}
+	return;
+}
+
+macro change-TRANSFERTO(newphone,extension){
+	if(${LEN(${newphone})}!=10 & ${LEN(${newphone})}!=1 & ${LEN(${newphone})}!=3 & ${LEN(${extension})}!=1 & ${LEN(${extension})}!=10){
+		// not a valid phone number
+		return;
+	}
+	if(${newphone}==${extension:-3}){
+		// loop detected
+		Playback(option-is-invalid);
+		return;
+	}
+
+	Set(result=${ODBC_SETTRANSFERTO(${newphone},${extension})});
+	Set(ROWSAFFECTED=${CUT(result,\,,1)});
+
+	if("${ROWSAFFECTED}"="0"){
+			Playback(im-sorry-unable-to-connect-to-eng);
+	}
+	else{
+		if("${newphone}"="0")
+			Playback(num-was-successfully&removed);  //  success
+		else
+			Playback(num-was-successfully&vm-saved);  //  success
+	}
+	return;
+};
+
+macro change-STANDBYPHONE(newphone){
+	if((${LEN(${newphone})}!=10 & ${LEN(${newphone})}!=1) || (${LEN(${DB_DID})}<10)){
+		return;
+	}
+	Set(result=${ODBC_SETOVERRIDE(${newphone},${CUSTOMERSNAME},${DB_DID})});
+	Set(ROWSAFFECTED=${CUT(result,\,,1)});
+	if("${ROWSAFFECTED}"="0"){
+		Playback(im-sorry-unable-to-connect-to-eng);
+	}
+	else{
+		if("${newphone}"="0")
+			Playback(num-was-successfully&removed);  //  success
+		else 
+			Playback(num-was-successfully&vm-saved);  //  success
+	}
+	return;
+};
+
+macro changeAfterhoursOverride(){
+        // user wants to update schedule
+        Set(CHANNEL(language)=en); //  make sure we are using english (all prompts are in english)
+        //Set(CDR(destination)=MACRO_AFTERHOURS);
+        &get-ACCESSPASSWORD(${CUSTOMERSNAME});
+        if(${LEN(${FROM_DB_PHONEACCESSPASSWORD})}=0){
+			Hangup();
+        }
+        Authenticate(${FROM_DB_PHONEACCESSPASSWORD},j,5);
+        plantao_number:
+        Read(plantao_option,enter-phone-number10,10,,1,2);
+        // ALLOW ONLY USA NUMBERS
+        if(${LEN(${plantao_option})}=10){
+			Set(LOCAL(ODBC_ID)=${ODBC_GETDIDsONACCOUNT(${CUSTOMERSNAME})});
+			if(${ODBCROWS} < 1){
+				// No DIDs found on account
+				Log(WARNING,No DIDs found on account);
+				Hangup();
+			}
+			Set(LOCAL(isloopDID)=0);
+			for(x=1;${x}<=${ODBCROWS};x=${x}+1){
+				Set(LOCAL(did)=${ODBC_FETCH(${ODBC_ID})});
+				if("${did}"=="${plantao_option}"){
+					// loop number
+					Set(isloopDID=1);
+					Playback(you-dialed-wrong-number&feature-not-avail-line&you-entered);
+					SayDigits(${plantao_option});
+					break;
+				}
+			}
+
+			ODBCFinish(${ODBC_ID}); // Clean up any remaining data.
+			if("${isloopDID}"=="1"){
+				goto plantao_number;
+			}
+
+			Playback(you-entered);
+			SayDigits(${plantao_option});
+			Read(confirm_plantao_option,if-this-is-correct&press-1&if-this-is-not-correct&press-2,1,,1,3);
+			if(${LEN(${confirm_plantao_option})}>0){
+				noop(plantao_option=${plantao_option}   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^);
+				if(${confirm_plantao_option}=1){
+					&change-STANDBYPHONE(${plantao_option});
+					NoCDR();
+					Hangup();
+				}
+				else{
+					// try again
+					goto plantao_number;
+				}
+			}
+			else{
+				Playback(bad&number&hangup-try-again&vm-goodbye);
+			}
+        }
+        else{
+			if("${plantao_option}"="*"){
+				// remove override
+				&change-STANDBYPHONE(0);
+				NoCDR();
+				Hangup();
+			}
+			// try again
+			goto plantao_number;
+        }
+        return;
+};
+
+macro holiday-greetings(){
+	Set(holiday=);
+	ifTime(*|*|20-25|dec){
+		Set(holiday=natal);
+                noop(@@@@@@@@@@@@@@@@@@@@   christmas);
+        }
+        else ifTime(*|*|31|dec){
+		Set(holiday=newyear);
+                noop(@@@@@@@@@@@@@@@@@@@@   newyear);
+        }
+        else ifTime(*|*|1|jan){
+		Set(holiday=newyear);
+                noop(@@@@@@@@@@@@@@@@@@@@   newyear);
+        }
+        else ifTime(*|mon|25-31|may){
+		holiday=memorial;
+                noop(@@@@@@@@@@@@@@@@@@@@   memorial);
+        }
+        else ifTime(*|mon|1-7|sep){
+		holiday=labor;
+                noop(@@@@@@@@@@@@@@@@@@@@   labor);
+        }
+        else ifTime(*|thu|22-28|nov){
+                holiday=thanksgiving;
+                noop(@@@@@@@@@@@@@@@@@@@@   thanksgiving);
+        }
+		/* 
+		else ifTime(*|fri-sun|*|mar-apr){
+			holiday=easter;
+			agi(is_easter.agi);
+			log(warning, It's Easter:${IS_EASTER});
+		}
+		*/
+
+	return;
+};
+
+macro sendExtRingToWORKCRM(extCRM){
+	if("${CUSTOMERSNAME}"=="ARTESTAMPA" && ${LEN(${CALLERID(num)})}>=10){
+		log(Warning,############################### 222 WORKCRM 222 ^^^^^^^^^^^^^^^^^^^^^ callerid= ${CALLERID(num)} $$$ customer= ${CUSTOMERSNAME});
+		Set(workCRM_Result=${CURL(http://demo.workcrm.com.br/wconnect/WConnect_CTIListener.php?TipoCTI=EVOLVE&Ramal=${extCRM}&NumeroOrigem=${CALLERID(num)})});
+		Set(workCRM_Result=${CUT(workCRM_Result, ,1)});
+		Set(isCRM_Valid=${FILTER(0-9.,${workCRM_Result})});
+	}
+	return;
+}
+
+macro RequestToDialLocal(){
+	Set(CHANNEL(language)=pt);
+	Read(option3,enter-phone-number10,10,,2,3);
+	if(${LEN(${option3})}=10){
+		Dial(SIP/1${option3}@voipms,60,T);
+	}
+	else{
+		Playback(vm-incorrect);
+	}
+	Hangup();
+	return;
+};
+
+macro RequestToDialOut(){
+	Set(CHANNEL(language)=pt);	
+	noop(callerid=${CALLERID(num):-10});
+	Set(result=${ODBC_GETDIALOUT(${CALLERID(num)})});
+	Set(DB_DIALOUTACCOUNT=${CUT(result,\,,1)});   
+	Set(DB_DIALOUTENABLED=${CUT(result,\,,2)});   
+	Set(DB_DIALOUTINTERNATIONAL=${CUT(result,\,,3)});   
+	Set(DB_DIALOUTACCOUNTACTIVE=${CUT(result,\,,4)});   
+	Set(DB_DIALOUTPASSWORD=${CUT(result,\,,5)});
+
+	Set(CUSTOMERSNAME=${DB_DIALOUTACCOUNT});
+	Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+
+	//agi(googletts.agi,'por favor entre o numero desejado',pt-BR);
+	//agi(gletts.agi,'por favor entre o numero desejado',pt-BR);
+
+	if(${LEN(${DB_DIALOUTENABLED})}==0 || "${DB_DIALOUTENABLED}"="0" || "${DB_DIALOUTACCOUNTACTIVE}"=="0"){
+		noop(Dial out not enabled or company not active);
+		noop(not  valid callerid and does not require a passcode);
+		Playback(service&unavailable);
+		Playtones(congestion);
+		Playtones(congestion);
+		Hangup();  // Hangup since it's NOT a valid callerid and does not require a passcode
+	}
+
+	if(${LEN(${DB_DIALOUTPASSWORD})}!=000000){
+		// HAS PASSWORD
+		entresenha:
+		// agi(gletts.agi,'Favor entrar a sua senha.',pt-BR);
+		Read(option5,favorEntrarPassword,8,,2,4);
+		noop(Senha is ${DB_DIALOUTPASSWORD}  user entered ${option5});
+		if("${option5}"!="${DB_DIALOUTPASSWORD}"){
+			goto entresenha;
+		}
+		noop(SENHA 000000000000000000);
+	}
+
+	disquenumero:
+	Read(option3,entrenumerodesejado,15,,2,4);
+	if(${LEN(${option3})}=15){
+		if("${DB_DIALOUTINTERNATIONAL}"="0"){
+			Playback(service&unavailable);
+			Playtones(congestion);Playtones(congestion);
+			Hangup();
+		}
+		else if(${REGEX("^01155[0-9][0-9][6789][0-9]{7}$" ${option3})}=1){
+			Set(TIMEOUT(absolute)=1800);
+			Set(CDR(userfield)=MOBILE);
+		}
+		else{
+			Dial(SIP/${option3}@${DB_INTERPROVIDER1},60,T);
+			Dial(SIP/${option3}@${DB_INTERPROVIDER2},60,T);
+		}
+	}
+	else if(${LEN(${option3})}=10 | ${LEN(${option3})}=11){
+		Dial(SIP/1${option3:-10}@${DB_INTERPROVIDER1},60,T);
+		Dial(SIP/1${option3:-10}@${DB_INTERPROVIDER2},60,T);
+	}
+	else {
+		agi(gletts.agi,'Para fazer ligação internacional Favor discar zero onze e o código do país antes do número há ser chamado',pt-BR);
+		// Favor discar 011 e o codigo do pais antes do numero a ser chamado.
+		//Playback(vm-incorrect);
+		goto disquenumero;
+	}
+	Hangup();
+	return;
+};
+
+macro doVM(){
+	StopMixMonitor();  // stop before voicemail begins
+	if ("${DIALSTATUS}"="CHANUNAVAIL" || "${DIALSTATUS}"="NOANSWER"	|| "${DIALSTATUS}"="CONGESTION")
+	{
+		VoiceMail(${EXTEN}@VM-${CUSTOMERSNAME},u);
+	}
+	else if("${DIALSTATUS}"="BUSY"){
+		VoiceMail(${EXTEN}@VM-${CUSTOMERSNAME},b);
+	}
+	if("${VMSTATUS}"="FAILED"){Playback(vm-mailboxfull);}
+	Hangup();
+	return;
+};
+
+macro getRate(provider,numberDialed){
+	if(${LEN(${numberDialed})}<10)
+		return;
+	Set(phone=);
+	Set(prefix=);
+	Set(isLocal=no);
+	if(${LEN(${numberDialed})}>11)	{
+		if("${numberDialed:0:3}"="011"){
+			// international call		
+			if(${LEN(${numberDialed})}=15){
+				// 011552126208893 becomes 552126208893
+				phone=${numberDialed:3};
+				// 552126208893 becomes 55212
+				prefix=${phone:0:5};
+			}
+		}
+	}
+	else if(${LEN(${numberDialed})}==11){
+		isLocal=yes;
+		prefix=${numberDialed:0:6};
+		numberDialed=${numberDialed:1};
+	}
+	Set(result=${ODBC_GETRATE(${provider},${prefix})});
+
+	Set(FROM_DB_RATEDESCRIPTION=${CUT(result,\,,1)});
+	Set(FROM_DB_RATEVALUE=${CUT(result,\,,2)});
+	Set(FROM_DB_RATEPREMIUM=${CUT(result,\,,3)});
+	Set(FROM_DB_PROVIDER=${CUT(result,\,,4)});
+
+	if(${LEN(${FROM_DB_RATEDESCRIPTION})}>0){
+		Set(CDR(rateDescription)=${FROM_DB_RATEDESCRIPTION});
+		Set(CDR(rateProvider)=${FROM_DB_PROVIDER});
+	}
+	Set(providerRate=${IF($[${LEN(${FROM_DB_RATEPREMIUM})}>0]?${FROM_DB_RATEPREMIUM}:0)});
+	Set(providerBillSec=${CDR(billsec)});
+	if(${LEN(${CALLERID(num)})}<=4 & ${LEN(${EXTEN})}<=4 & ${LEN(${CALLERID(num)})}>1 | "${numberToRate}"="LANDLINE" | "${numberToRate}"="TOLLFREE"){
+		// internal call, disregard
+		Set(CDR(rate)=0);
+		Set(CDR(rateCallcost)=0);
+		Set(CDR(rateProvider)=n/a);
+	}
+	else{
+		Set(CDR(rate)=${providerRate});
+		if(${LEN(${FROM_DB_PROVIDER})}>0){
+			if("${FROM_DB_PROVIDER}"="voipms"){
+				Set(providerPulse=${MATH(${CDR(billsec)}/6,int)});
+				Set(providerRate=$[${providerRate}/10]);
+			}
+			else{
+				Set(providerPulse=${MATH(${CDR(billsec)}/6,int)});
+			}
+			rateCallcost=${providerRate}*${providerPulse};
+			Set(CDR(rateCallcost)=${rateCallcost});
+		}
+	}
+	return;
+};
+
+macro dialBrazil(ext,account){
+	Set(peername=${CHANNEL(peername)});
+	Set(peer=${FILTER(0-9,${peername})});
+
+	if("${${CUSTOMERSNAME}-isIncomingCall}"!="yes"){
+		// BASICVARS has been checked elsewhere
+		&get-BASICVARS(${CUSTOMERSNAME});
+		&get-PEERINFO(${peer});
+	}
+	Set(CHANNEL(accountcode)=${CUSTOMERSNAME});
+	Set(CDR(server)=${SYSTEMNAME});
+	Set(CDR(destination)=${EXTEN});
+	Set(numberToRate=${EXTEN});
+
+	Set(CALLERID(num)=${DB_MAINCALLERID});
+
+	Set(CALLERID(num)=${DB_MAINCALLERID});
+	Set(CHANNEL(parkinglot)=parkinglot_${CUSTOMERSNAME}_${CHANNEL(language)});
+	&get-ISCONGESTION(${ext});
+	Set(CHANNEL(musicclass)=${CUSTOMERSNAME}_${CHANNEL(language)});
+	&get-ISALLOWEDCOUNTRY(${ext});
+
+	&get-ISCONGESTION(${ext});
+
+	if("${DB_ISVALIDCOUNTRYCODE}"!="1"){
+		// not a valid country code
+		Playback(feature-not-avail-line); Hangup();
+	}
+
+	Set(isBR=${REGEX("^01155[0-9][0-9][0-9]+" ${ext})});
+	Set(isMOBILE=${REGEX("^01155[1-9][0-9][789][0-9]+" ${ext})});
+	Set(is0800=${REGEX("^011550800+" ${ext})});
+	Set(is0300=${REGEX("^011550300+" ${ext})});
+
+	if("${isBR}"="1"){
+		Set(PROVIDER1=${DB_BRAZILPROVIDER1});
+		Set(PROVIDER2=${DB_BRAZILPROVIDER2});
+		Set(PROVIDER3=${DB_BRAZILPROVIDER3});
+
+		if("${isMOBILE}"="1"){
+			Set(CDR(userfield)=MOBILE);
+			if("${IAM_FORWARDING_SCHEDULE}"=="1"){
+				log(WARNING,$$$$$$$$$$$$$$$$$$$$$$$$  FORWARDING SCHEDULE cannot forward ${DB_CAN_FWD_ToBr_MOBILE}  888888888888888888888888);
+				if("${DB_CAN_FWD_ToBr_MOBILE}"!="1"){
+					log(WARNING,$$$$$$$$$$$$$$$$$$$$$$$$   cannot call cellphone 1   888888888888888888888888);
+					Playtones(congestion);
+					Hangup();
+				}
+			}
+
+			if(${LEN(${peer})}>0 && "${FROM_DB_CANCALLBRCELLPHONE}"!="1"){
+				log(WARNING,$$$$$$$$$$$$$$$$$$$$$$$$   cannot call cellphone 2  888888888888888888888888);
+				Playtones(congestion);
+				Hangup();
+			}
+
+			Set(result=${ODBC_GETBRCELLPHONEPROVIDERS(${CUSTOMERSNAME})});
+			if(${LEN(${result})}==0){return;}
+			Set(FROM_DB_BRCELPHONEPROVIDER1=${CUT(result,\,,1)});   
+			Set(FROM_DB_BRCELPHONEPROVIDER2=${CUT(result,\,,2)});   
+			Set(FROM_DB_BRCELPHONEPROVIDER3=${CUT(result,\,,3)});   
+
+			Set(PROVIDER1=${FROM_DB_BRCELPHONEPROVIDER1});
+			Set(PROVIDER2=${FROM_DB_BRCELPHONEPROVIDER2});
+			Set(PROVIDER3=${FROM_DB_BRCELPHONEPROVIDER3});
+		}else if("${is0800}"="1" || "${is0300}"="1"){
+			// get password to change schedule
+			Set(result=${ODBC_GET0800PROVIDER(${CUSTOMERSNAME})});
+			if("${result}"=""){
+				Playback(im-sorry-unable-to-connect-to-eng);
+				Hangup();
+			}else{
+				Set(FROM_DB_0800PROVIDER1=${CUT(result,\,,1)});
+				Set(PROVIDER1=${FROM_DB_0800PROVIDER1});
+			}
+		}
+	}
+	&record(0);
+
+	Set(rateProvider=${PROVIDER1});
+
+	noop(Customer ${CUSTOMERSNAME} is dialing out);
+
+	if("${PROVIDER1}"="anveo"){
+		if("${isMOBILE}"="1"){
+			Dial(SIP/0CELU1${ext}@sbc.anveo.com,30,KTr);
+			Dial(SIP/0CELUL${ext}@sbc.anveo.com,30,KTr);
+		}else{
+			Dial(SIP/0BRFIX${ext}@sbc.anveo.com,30,KTr);
+		}
+	}else if("${PROVIDER1}"="voipms"){
+		Dial(SIP/044${ext:3}@voipms_INTERNAT,30,KTr);
+	}else if("${PROVIDER1}"="voipinnovations"){
+			Dial(SIP/${ext}@voipinnovations,30,KTr);
+	}else if("${PROVIDER1}"="voipdobrasil"){
+		if("${is0800}"="1"){
+			Dial(SIP/0${ext:6}@voipdobrasil,30,KTr);
+			// Dial(SIP/55${ext:6}@voipdobrasil,30,KTr);
+		}
+		else if("${is0300}"="1"){
+			Dial(SIP/0${ext:6}@voipdobrasil,30,KTr);
+		}
+		else{
+			Dial(SIP/0${ext:5}@voipdobrasil,30,KTr);
+		}
+	}
+	Set(rateProvider=${PROVIDER2});
+	if("${DIALSTATUS}"!="NOANSWER" | "${DIALSTATUS}"!="BUSY"){
+		if("${PROVIDER2}"="anveo"){
+			if("${isMOBILE}"="1")
+				Dial(SIP/0CELUL${ext}@sbc.anveo.com,30,KTr);
+			else
+				Dial(SIP/0BRFIX${ext}@sbc.anveo.com,30,KTr);
+		}else if("${PROVIDER2}"="voipms"){
+			Dial(SIP/044${ext:3}@voipms_INTERNAT,30,KTr);
+		}else if("${PROVIDER2}"="voipinnovations"){
+			Dial(SIP/${ext}@voipinnovations,40,KTr);
+		}else if("${PROVIDER2}"="voipdobrasil"){
+			if("${is0800}"="1"){
+				Dial(SIP/${ext:6}@voipdobrasil,30,KTr);
+				//Dial(SIP/55${ext:6}@voipdobrasil,30,KTr);
+			}else{
+				Dial(SIP/0${ext:5}@voipdobrasil,30,KTr);
+			}
+		}
+		Set(rateProvider=${PROVIDER3});
+		if("${DIALSTATUS}"!="NOANSWER" | "${DIALSTATUS}"!="BUSY"){
+			noop(Provider= ${rateProvider}  $$$$$$$$$$$$$$$$$$$$$$$$$  $$$$$  $$$$$);
+			if("${PROVIDER3}"="anveo"){
+				if("${isMOBILE}"="1")
+					Dial(SIP/0CELUL${ext}@sbc.anveo.com,30,KTr);
+				else
+					Dial(SIP/0BRFIX${ext}@sbc.anveo.com,30,KTr);
+				}else if("${PROVIDER3}"="voipms"){
+					Dial(SIP/044${ext:3}@voipms_INTERNAT,30,KTr);
+				}else if("${PROVIDER3}"="voipinnovations"){
+					Dial(SIP/${ext}@voipinnovations,40,KTr);
+				}else if("${PROVIDER3}"="voipdobrasil"){
+					Dial(SIP/0${ext:5}@voipdobrasil,40,KTr);
+				}
+			}
+		}
+        Hangup();
+
+	return;
+}
+
+macro MAIN-dialoption(o){
+	return;
+}
+
+macro transfertoUSA(){
+	noop(CHEGUEI);
+	return;
+}
+
+macro do-QUEUE(optiontodial){
+	if("${DB_QUEUEENABLED}"=="0"){
+		return;
+	}
+
+	Set(__optiontodial=${optiontodial});
+	lang=${CHANNEL(language)};
+	Set(nametoAddToCalleriID="");
+	overflow:
+
+	Set(nametoAddToCalleriID=(${DB_MENUOPT${optiontodial}}-${lang}));
+	Set(queuename=${CUSTOMERSNAME}_${lang}_${optiontodial});
+
+	if(!${QUEUE_EXISTS(${queuename})}){
+		noop(################ NO QUEUE  ######################### NO QUEUE   $$$$$$$$$$);
+		return;
+	}
+
+	//        if(${CHANNEL(language)}=pt){
+	//	SIPAddHeader(Alert-Info:n=Office;w=4;c=1);
+	//		SIPAddHeader(Alert-Info:Office);
+	//        }
+
+	Set(CHANNEL(parkinglot)=parkinglot_${CUSTOMERSNAME}_${CHANNEL(language)});
+
+	// Set(DB_QUEUERINGTIME=30);
+
+	if(${LEN(${DB_QUEUERINGTIME})}==0){
+		&send-email(no default ring time for ${CUSTOMERSNAME}, ${MAINSERVER});
+		DB_QUEUERINGTIME=30;
+	}
+
+	if("${DB_MENUADDNAMETOCALLERID}"=="1"){
+		if("${nametoAddToCalleriID}"!="(na)")
+			Set(CALLERID(name)=${nametoAddToCalleriID}${CALLERID(name)});
+	}
+
+	Set(__queuename=${queuename});
+	QueueLog(${queuename},${UNIQUEID},NONE,EVOLVE_ENTERQUEUE,${CUSTOMERSNAME}|${CALLERID(num)}|${optiontodial}|${Var_TO:-10});
+
+	if("${DB_QUEUEMOHENABLED}"="0"){
+		log(warning, %%%%%%%%%%%%%%%%%%%%%%%%%%% rings instead of moh);
+		Queue(${queuename},TtKkr,,,${DB_QUEUERINGTIME},,do-SaveAgent);
+		Set(__queuenameFail=${queuename}_Fail);
+		if(!${QUEUE_EXISTS(${queuenameFail})}){
+				noop(################ NO QUEUE  ######################### NO QUEUE   $$$$$$$$$$);
+				return;
+		}
+		Queue(${queuenameFail},TtKkr,,,30,,do-SaveAgent);
+	}else if("${DB_QUEUEMOHENABLED}"="1"){
+                //Queue(${queuename},TtKk,,,${DB_QUEUERINGTIME},,do-SaveAgent);
+                Queue(${queuename},TtKk,,,${DB_QUEUERINGTIME},,);
+                Set(__queuenameFail=${queuename}_Fail);
+                if(!${QUEUE_EXISTS(${queuenameFail})}){
+                        noop(################ NO QUEUE  ######################### NO QUEUE   $$$$$$$$$$);
+                        return;
+                }
+
+                Queue(${queuenameFail},TtKkr,,,30,,);
+                //Queue(${queuenameFail},TtKkr,,,30,,do-SaveAgent);
+        }else{
+                log(warning, $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$   Failed to get DB_QUEUEMOHENABLED=${DB_QUEUEMOHENABLED});
+        }
+
+	if("${comebackTodispatcher}"="yes"){
+		noop($$$$$$$$$   going back  ^^^^^^^^^^^^^^^^^^^^^^^^);
+		return;
+	}
+
+	if ("${QUEUESTATUS}"=="JOINUNAVAIL" ||
+		"${QUEUESTATUS}"=="UNKNOWN" ||
+		"${QUEUESTATUS}"="JOINEMPTY" ||
+		"${QUEUESTATUS}"="TIMEOUT" ||
+		"${DIALSTATUS}"="CHANUNAVAIL" ||
+		"${DIALSTATUS}"="NOANSWER" ||
+		"${DIALSTATUS}"="BUSY")
+	{
+		Playback(everyonebusy);
+		if(${LEN(${DB_RECEPCIONIST_EXT})}<3){
+			Set(DB_RECEPCIONIST_EXT=101);
+		}
+		StopMixMonitor();  // stop before voicemail begins
+		VoiceMail(${DB_DEFAULTVM}@VM-${CUSTOMERSNAME});
+		&do-VM(${DB_RECEPCIONIST_EXT},u);
+	}
+	Hangup();
+	return;
+}
+
+macro do-MENUQUEUE(queuename){
+	lang=${CHANNEL(language)};
+	Set(nametoAddToCalleriID="");
+	overflow:
+
+	if(!${QUEUE_EXISTS(${queuename})}){
+		log(WARNING, QUEUE ${queuename} DOSEN'T EXIST);log(WARNING, QUEUE ${queuename} DOSEN'T EXIST);log(WARNING, QUEUE ${queuename} DOSEN'T EXIST);
+		return;
+	}
+
+	Set(CHANNEL(parkinglot)=parkinglot_${CUSTOMERSNAME}_${lang});
+
+	if(${LEN(${DB_QUEUERINGTIME})}==0){
+		DB_QUEUERINGTIME=30;
+	}
+
+	if("${DB_MENUADDNAMETOCALLERID}"=="1"){
+		if("${nametoAddToCalleriID}"!="(na)")
+			Set(CALLERID(name)=${nametoAddToCalleriID}${CALLERID(name)});
+	}
+
+	Set(__queuename=${queuename});
+	QueueLog(${queuename},${UNIQUEID},NONE,EVOLVE_ENTERQUEUE,${CUSTOMERSNAME}|${CALLERID(num)}|${optiontodial}|${Var_TO:-10});
+
+	if("${DB_QUEUEMOHENABLED}"="0"){
+		//  rings instead of moh
+		Queue(${queuename},TtKkr,,,${DB_QUEUERINGTIME},,do-SaveAgent);
+		Set(__queuename=${queuename}_Fail);
+		if(!${QUEUE_EXISTS(${queuename})}){
+			return;
+		}
+		Queue(${queuename},TtKkr,,,60,,do-SaveAgent);
+	}
+	else{
+		Queue(${queuename},TtKk,,,${DB_QUEUERINGTIME},,do-SaveAgent);
+		Set(__queuename=${queuename}_Fail);
+		if(!${QUEUE_EXISTS(${queuename})}){
+			return;
+		}
+		Queue(${queuename},TtKkr,,,60,,do-SaveAgent);
+	}
+	return;
+}
+
+macro macro-do-SaveAgent(){
+	log(warning,member=${MEMBERINTERFACE});
+	log(warning,${CONNECTEDLINE(num)} ${CONNECTEDLINE(name)} );
+	Set(CDR(peeranswered)=${MEMBERNAME});
+	return;
+}
+
+macro log-DID-vars() {
+	Set(fieldlist=${DIDDATA_FIELDNAMES});
+	Set(quantity=${FIELDQTY(fieldlist,\,)});
+    if("${LEN(${fieldlist})}"=="0") {
+        NoOp(WARNING: DIDDATA_FIELDNAMES not set – skipping variable logging);
+        Return();
+    }
+
+    Set(i=1);
+    while(${i}<${quantity}) {
+        Set(currentkey=${CUT(fieldlist,\,,${i})});
+
+        // ✅ End loop if key is empty
+        if("${LEN(${currentkey})}"=="0") {
+            NoOp(Finish while_log-DID-vars_${i});
+            break;
+        }
+
+        // ✅ Skip the placeholder _
+        if("${currentkey}" != "_") {
+            NoOp(DID-VAR: ${currentkey} = ${${currentkey}});
+        }
+
+	Set(i=${INC(i)});
+    }
+
+    return;
+}

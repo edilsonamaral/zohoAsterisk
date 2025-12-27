@@ -1,0 +1,41 @@
+// Dispatch context: Inspects the channel variable IS_AGENT
+// to decide where to send the channel.
+context moh-dispatch {
+    s => {
+        NoOp(Dispatching Hold: Agent=${IS_AGENT});
+        if ("${IS_AGENT}" == "1") {
+            goto moh-agent-wait,s,1;
+        } else {
+            goto moh-caller-hold,s,1;
+        }
+    };
+}
+
+// Caller hears Ringing (or Music)
+context moh-caller-hold {
+    s => {
+        NoOp(Caller on hold);
+        Answer();
+        MusicOnHold(default); // Uncomment if MOH is fixed
+        Hangup();
+    };
+}
+
+// Agent hears a beep and then silence (keeps them alive)
+context moh-agent-wait {
+    s => {
+        NoOp(Agent waiting on hold);
+        Answer();
+        // Play a short beep so agent knows hold succeeded
+	MusicOnHold(default); 
+        Hangup();
+    };
+}
+
+// Fallback unhold context (if Bridge action fails)
+context moh-unhold {
+    s => {
+        NoOp(Resuming call - fallback);
+        Return();
+    };
+}

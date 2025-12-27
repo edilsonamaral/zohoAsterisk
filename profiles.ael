@@ -1,0 +1,91 @@
+macro get-profile(account,profilename){
+	profilename= ${FILTER(A-Za-z0-9,${profilename})};  //  TRIM spaces.
+
+	if("${profilename}"=="" | "${profilename}"=="none"){
+		return;
+	}
+	Set(LOCAL(profileresult)=${ODBC_GETPROFILE(${account},${profilename})});
+	if(${ODBCROWS} == 1){
+	        Set(schedulename=${CUT(profileresult,\,,1)});
+		Set(Profile_FWD1=${CUT(profileresult,\,,2)});
+		Set(Profile_FWD2=${CUT(profileresult,\,,3)});
+		Set(Profile_FWD3=${CUT(profileresult,\,,4)});
+		Set(maincallerid=${CUT(profileresult,\,,5)});
+		Set(Profile_LANGUAGE=${CUT(profileresult,\,,6)});
+		Set(Profile_name=${profilename});
+		//Set(PROFILE_PLAYATENDEDOR=${CUT(profileresult,\,,8)});
+		Set(Profile_playrecordwarning=${CUT(profileresult,\,,9)});
+		Set(Profile_GOTOPHONE1=${CUT(profileresult,\,,10)});
+		Set(Profile_GOTOPHONE2=${CUT(profileresult,\,,11)});
+		Set(Profile_GOTOPHONE3=${CUT(profileresult,\,,12)});
+                Set(Profile_GOTOPHONETIMEOUT1=${CUT(profileresult,\,,13)});
+                Set(Profile_GOTOPHONETIMEOUT2=${CUT(profileresult,\,,14)});
+                Set(Profile_GOTOPHONETIMEOUT3=${CUT(profileresult,\,,15)});
+		Set(Profile_GOTOPHONE_PLAYGREETING=${CUT(profileresult,\,,16)});
+                Set(Profile_GOTOPHONE_En=${CUT(profileresult,\,,17)});
+                Set(Profile_GOTOPHONE_Es=${CUT(profileresult,\,,18)});
+                Set(Profile_GOTOPHONE_Pt=${CUT(profileresult,\,,19)});
+		
+		Set(Var_TO=${maincallerid});
+	}
+	
+	return;
+};
+
+macro get-profile-menu(profilename){
+        profilename= ${FILTER(A-Za-z0-9,${profilename})};  //  TRIM spaces.
+        if("${profilename}"=="" | "${profilename}"=="none"){
+                return;
+        }
+
+	Set(LOCAL(profileresult)=${ODBC_GETPROFILEMENU(${CUSTOMERSNAME},${profilename})});	
+        if(${ODBCROWS} == 1){
+                Set(schedulename=${CUT(profileresult,\,,1)});
+                Set(Profile_FWD1=${CUT(profileresult,\,,2)});
+                Set(Profile_FWD2=${CUT(profileresult,\,,3)});
+                Set(Profile_FWD3=${CUT(profileresult,\,,4)});
+                Set(maincallerid=${CUT(profileresult,\,,5)});
+                Set(Profile_LANGUAGE=${CUT(profileresult,\,,6)});
+
+                Set(Var_TO=${maincallerid});
+        }
+
+	return;	
+}
+
+macro get-audio(account,filename){
+	if(${LEN(${account})}==0 || ${LEN(${filename})}==0 ) return;
+	Set(LOCAL(lang)=${CHANNEL(language)});
+	//  old way for manually added files
+
+	AUDIOFILE_PATH="${ASTDATADIR}/sounds/${lang}/${account}";
+	Set(LOCAL(exists)=${STAT(e,${AUDIOFILE_PATH}/${filename}.wav)});
+
+	if("${exists}"="1"){
+		noop(Audio File EXISTS=${exists});
+		ATENDEDOR_FILENAME=${filename};
+	}else{
+		// Try files with hash.
+		// get Hash
+		Set(LOCAL(result)=${ODBC_GETAUDIOHASH(${CUSTOMERSNAME},${filename})});
+                if(${ODBCROWS} == 1){
+                        Set(LOCAL(DB_AUDIO_HASH)=${CUT(result,\,,1)});
+			//AUDIOFILE_PATH="${ASTDATADIR}/sounds/${lang}/${account}";
+		        Set(LOCAL(exists)=${STAT(e,${AUDIOFILE_PATH}/${filename}_${DB_AUDIO_HASH}.wav)});
+			if("${exists}"!="1"){
+				// File not found, download it from DB.
+				agi(downloadAudio.agi,${filename},${lang},${account},"${ASTDATADIR}");
+				log(warning, NEW AUDIO_FILENAME FROM AGI=${ATENDEDOR_FILENAME});
+				Set(LOCAL(exists)=${STAT(e,${AUDIOFILE_PATH}/${filename}_${DB_AUDIO_HASH}.wav)});
+				if("${exists}"!="1"){
+					// Test again
+					log(warning, COULDN'T save file to disk.  ${filename}_${DB_AUDIO_HASH}       @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@);
+					log(warning,  NOT PLAYING FILE @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@);
+				}
+			}
+
+			ATENDEDOR_FILENAME=${filename}_${DB_AUDIO_HASH};
+		}
+	}
+	return;
+};
