@@ -1,0 +1,48 @@
+#!/usr/bin/env perl
+# yum install perl-DateTime 
+# cpan install Date::Parse
+
+use strict;
+use DateTime;
+use Date::Parse;
+use Asterisk::AGI;
+
+$|=1;
+
+my $AGI = new Asterisk::AGI;
+
+my $timezone = $ARGV[0];
+my $startTime =  $ARGV[1];
+my $endTime =  $ARGV[2];
+
+#### server local time
+#### my $dt2 = DateTime->now(time_zone => 'local');
+
+my $dt = DateTime->now(time_zone => $timezone);
+my $localtime = $dt->strftime("%Y-%m-%d %T");
+
+my $t1 = str2time("$startTime");
+my $t2 = str2time("$endTime");
+my $t3 = str2time("$localtime");
+
+print "$t1\n";
+print "$t2\n";
+print "$t3\n";
+
+
+if($t1<$t3 & $t2>$t3)
+{
+	print "edilson\n";
+}
+else{
+	print "T2 is greater\n";
+}
+
+# prints time in desired format
+# print "The current date and time at the location is: ", $dt->strftime('%Y-%m-%d %T');
+
+## $AGI->set_variable("DIDLOCALTIME", "$localtime");
+
+exit;
+
+# America/Sao_Paulo

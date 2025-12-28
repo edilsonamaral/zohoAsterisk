@@ -1,0 +1,77 @@
+#!/usr/bin/perl
+
+use strict;
+use DBI;
+use Data::UUID;
+use Asterisk::AGI;
+use Cwd qw(cwd);
+
+$|=1;
+
+##  needs LAME, DBI:mysql, DBD::mysql
+
+my $AGI = new Asterisk::AGI;
+my $Path = $ARGV[0];
+my $CustomfileName = $ARGV[1];
+my $CompanyName = $ARGV[2];
+my $Notes = $ARGV[3];
+my $FromName = $ARGV[4];
+my $FromNum = $ARGV[5];
+my $To  = $ARGV[6];
+my $CDR_UNIQUEID = $ARGV[7];
+
+# ${pathToMonitorFolder} ${mixname} ${CUSTOMERSNAME} '${notes}' "${FromName}" "${FromNum}" ${To} ${CDR(userfield)});
+
+my $blob;
+my $wavFileName = "$CustomfileName.wav";
+my $mp3FileName = "$CustomfileName.mp3";
+my $absolutePath = "/var/spool/asterisk/monitor/${Path}";
+
+ print "Path is: ${Path}\n";
+ print "Absolute Path:$absolutePath\n";
+ print "Wave name: $wavFileName\n";
+ print "Mp3 name: $mp3FileName\n";
+my $wavfileLocation = $absolutePath.$wavFileName;
+my $mp3fileLocation = $absolutePath.$mp3FileName;
+
+chdir('/var/spool/asterisk/monitor') or die "$!";
+
+my $PathToLame = `which lame`;
+print $PathToLame;
+
+print "$wavfileLocation exists!\n" if -f $wavfileLocation;  # if file is a plain file
+
+system("/usr/bin/lame", "-V 2", $wavfileLocation, $mp3fileLocation);
+
+print "$?\n";
+
+my $FileSize = -s $mp3fileLocation;
+print "Size:";
+print $FileSize;
+print "Edilson\n";
+
+if($FileSize > 1024*50){
+	open(FILEH, $absolutePath.$mp3FileName) or die $!;
+	read (FILEH,$blob,-s  $absolutePath.$mp3FileName);
+	close FILEH;
+
+	our $dbh = DBI->connect('DBI:mysql:voipuser_media:127.0.0.1:3306','edilson','Ed6208893Ed',{ 
+		RaiseError => 1  ### Don't report errors via warn( )
+	});
+
+	my $sth = $dbh->prepare('INSERT INTO voipuser_media.audiofiles (name,file,accountcode,notes,callername,callernum,filesize,cdruniqueid,datecreated) VALUES (?,?,?,?,?,?,?,?,NOW())');
+	$sth->execute($CustomfileName,$blob,$CompanyName,$Notes,$FromName,$FromNum,$FileSize,$CDR_UNIQUEID);
+
+	$sth->finish();
+	$dbh->disconnect;
+}
+
+# delete the audio files
+
+print "$absolutePath$wavFileName\n";
+print "$absolutePath$mp3FileName\n";
+
+# unlink "$absolutePath$wavFileName";
+# unlink "$absolutePath$mp3FileName";
+
+exit;

@@ -1,0 +1,155 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use DBI;
+use File::Spec;
+use POSIX qw(strftime);
+
+$| = 1;
+
+# Configuration
+my $MONITOR_BASE = '/var/spool/asterisk/monitor';
+my $LAME_BIN     = '/usr/bin/lame';
+my $LOG_FILE     = '/tmp/saveMixMonitor.log';
+my $MIN_SIZE     = 5 * 1024;
+
+my $DB_DSN  = 'DBI:mysql:voipuser_media:127.0.0.1:3306';
+my $DB_USER = 'edilson';
+my $DB_PASS = 'Ed6208893Ed';
+
+# Logging
+sub log_msg {
+    my ($level, $msg) = @_;
+    chomp $msg;
+    my $ts = strftime('%Y-%m-%d %H:%M:%S', localtime);
+
+    if (open my $fh, '>>', $LOG_FILE) {
+        print $fh "[$ts][$level] $msg\n";
+        close $fh;
+    }
+    # Also print to STDERR for visibility
+    print STDERR "[$level] $msg\n";
+}
+
+local $SIG{__WARN__} = sub { log_msg('WARN', $_[0]) };
+local $SIG{__DIE__}  = sub { log_msg('ERROR', $_[0]); exit 1 };
+
+# Arguments
+my (
+    $custom_name,
+    $company,
+    $notes,
+    $from_name,
+    $from_num,
+    $to,
+    $cdr_uniqueid,
+    $apiUniqueId
+) = @ARGV;
+
+for my $arg ([$custom_name, 'custom_name'], [$company, 'company'], 
+             [$from_num, 'from_num'], [$cdr_uniqueid, 'cdr_uniqueid']) {
+    unless (defined $arg->[0] && length $arg->[0]) {
+        log_msg('ERROR', "Missing required argument: $arg->[1]");
+        exit 1;
+    }
+}
+
+# **FIX:  Strip any existing . wav extension from custom_name**
+$custom_name =~ s/\.wav$//i;
+
+# Prefix account name
+unless ($custom_name =~ /^\Q$company\E-/) {
+    $custom_name = "${company}-${custom_name}";
+}
+
+$notes     //= 'none';
+$from_name //= '';
+
+# File paths
+my $base_path = File::Spec->catfile($MONITOR_BASE, $company, $custom_name);
+my $wav_file  = "$base_path.wav";
+my $mp3_file  = "$base_path.mp3";
+
+log_msg('INFO', "Processing $wav_file");
+
+# Validate WAV
+unless (-f $wav_file) {
+    log_msg('ERROR', "WAV file not found: $wav_file");
+    exit 1;
+}
+
+my $wav_size = -s $wav_file;
+log_msg('INFO', "WAV size: $wav_size bytes");
+
+if ($wav_size < $MIN_SIZE) {
+    log_msg('INFO', "Skipping small WAV ($wav_size bytes)");
+    unlink $wav_file;
+    exit 0;
+}
+
+# Convert to MP3
+unless (-x $LAME_BIN) {
+    log_msg('ERROR', "lame not executable: $LAME_BIN");
+    exit 1;
+}
+
+log_msg('INFO', "Converting to MP3.. .");
+my $rc = system($LAME_BIN, '-V2', $wav_file, $mp3_file);
+if ($rc != 0) {
+    log_msg('ERROR', "LAME failed (exit code " . ($rc >> 8) . ")");
+    exit 1;
+}
+
+# Validate MP3
+unless (-f $mp3_file) {
+    log_msg('ERROR', "MP3 was not created");
+    exit 1;
+}
+
+my $mp3_size = -s $mp3_file;
+log_msg('INFO', "MP3 size:  $mp3_size bytes");
+
+if ($mp3_size < $MIN_SIZE) {
+    log_msg('INFO', "MP3 too small, deleting");
+    unlink $mp3_file;
+    exit 0;
+}
+
+# Read MP3
+open my $fh, '<: raw', $mp3_file or die "Cannot open MP3: $!";
+my $blob;
+read $fh, $blob, $mp3_size;
+close $fh;
+
+# Store in DB
+log_msg('INFO', "Connecting to database...");
+my $dbh = DBI->connect($DB_DSN, $DB_USER, $DB_PASS, 
+    { RaiseError => 1, AutoCommit => 1 });
+
+my $sql = qq{
+    INSERT INTO voipuser_media.audiofiles
+    (name, file, accountcode, notes, callername, callernum, filesize, cdruniqueid, apiuniqueid, datecreated)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+};
+
+my $sth = $dbh->prepare($sql);
+$sth->execute(
+    $custom_name, $blob, $company, $notes,
+    $from_name, $from_num, $mp3_size,
+    $cdr_uniqueid, $apiUniqueId
+);
+
+$sth->finish;
+$dbh->disconnect;
+
+log_msg('INFO', "✓ Uploaded MP3: $mp3_size bytes");
+
+# Cleanup WAV
+if (-f $wav_file) {
+    unlink $wav_file or log_msg('WARN', "Failed to delete WAV:  $!");
+    log_msg('INFO', "✓ Deleted WAV");
+}
+
+log_msg('INFO', "✓ Script completed successfully");
+exit 0;

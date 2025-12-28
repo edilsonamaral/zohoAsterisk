@@ -1,0 +1,14 @@
+{
+    "format": {
+        "filename": "/tmp/EVOLVE/EVOLVE0xcb42c716217146a39dd2be8fb8c20480.mp3",
+        "nb_streams": 1,
+        "nb_programs": 0,
+        "format_name": "mp3",
+        "format_long_name": "MP2/3 (MPEG audio layer 2/3)",
+        "start_time": "0.023021",
+        "duration": "83.856000",
+        "size": "2687668",
+        "bit_rate": "256407",
+        "probe_score": 51
+    }
+}

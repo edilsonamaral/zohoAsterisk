@@ -1,0 +1,47 @@
+#!/usr/bin/perl
+
+##  cpan install Date::Easter
+
+use strict;
+use DBI;
+use Data::UUID;
+use Asterisk::AGI;
+use File::Copy;
+use Date::Easter;
+use Time::Piece;
+
+$|=1;
+
+my $AGI = new Asterisk::AGI;
+my $t = Time::Piece->new();
+my $year = $t->year;
+my $m = $t->mon;
+my $d = $t->mday;
+
+my $month;
+my $day;
+
+# print "$m\n";
+# print "$d\n";
+
+#################################################
+
+($month,$day) = easter( $year );
+
+if ($month == $m and $day == $d){
+	print "$m\n";
+	#$AGI->set_variable("IS_EASTER", "1");
+}else{
+	print "Not Easter !\n";
+	#$AGI->set_variable("IS_EASTER", "0");
+}
+
+# if (!length || (/anonymous/i || /unavailable/i || /Unknown/i || /Restricted/i)){
+# 	print "We're talking about Caller Torture\n";
+#	#$AGI->set_variable("UNDESIRABLE_CALLER", "1");
+# }else{
+#	print "Regular Caller\n";
+#	$AGI->set_variable("UNDESIRABLE_CALLER", "0");
+#}
+
+# if("${CALLERID(name)}"=="Unavailable" || "${CALLERID(name)}"=="Unknown" || "${CALLERID(name)}"=="Restricted" ||"${CALLERID(name)}"=="Anonymous Caller" ||"${CALLERID(name)}"=="AnonymousCaller" || "${CALLERID(name)}"==""){

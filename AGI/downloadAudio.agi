@@ -1,0 +1,175 @@
+#!/usr/bin/perl
+
+#       encode: ffmpeg -y -i /tmp/EVOLVE/EVOLVE0xcb42c716217146a39dd2be8fb8c20480.mp3 -ar 8000 -ac 1 /tmp/EVOLVE/output.wav
+#	Probe incoming file to find format and size:
+#	ffprobe -v quiet -loglevel fatal -show_error -print_format json -show_format "/tmp/EVOLVE/file.mp3" > "test.json"
+
+use strict;
+
+
+#################  Use this if Asterisk user cannot find the path to module  
+use lib qw(/home/asterisk/perl5/lib/perl5);
+use lib qw(/home/asterisk/perl5/lib/perl5/x86_64-linux-thread-multi);
+################
+
+use DBI;
+use Data::UUID::MT;
+use Asterisk::AGI;
+use Digest::MD5::File qw(file_md5_hex);
+use 5.010;
+use feature ':5.10';
+
+$|=1;
+
+# AGI(downloadAudio.agi,${CustomFileName},${language},${Company});
+
+my $AGI = new Asterisk::AGI;
+my $fileName=$ARGV[0];
+my $language=$ARGV[1];
+my $Company=$ARGV[2];
+my $datadir=$ARGV[3];
+my $ug = Data::UUID::MT->new( version => 4 );
+
+
+
+
+my $logFilename1 = '/tmp/report1.txt';
+open(my $fh2, '>>', $logFilename1) or die "Could not open file '$logFilename1' $!";
+print $fh2 "From $fileName \n";
+close $fh2;
+
+my $tmpFileName = $ug->create_hex();
+
+#  Trim spaces
+$fileName =~ s/^\s+|\s+$//g;
+$language =~ s/^\s+|\s+$//g;
+$Company  =~ s/^\s+|\s+$//g;
+
+if(length($datadir)==0){
+	$datadir="/var/lib/asterisk";
+}
+
+my $path=$datadir . "/sounds/" . $language . "/$Company/";
+
+say $path;
+
+
+print STDERR "3.  Testing 'sendimage'...$path";
+
+our $dbh = DBI->connect('DBI:mysql:voipuser:localhost','edilson','Ed6208893Ed',{   
+	RaiseError         => 1,   # Let DBI crash on errors
+        PrintError         => 1,   # And have it shaw what fails
+        ChopBlanks         => 1,   # Mostly a good idea
+        ShowErrorStatement => 1,   # You'll want to see the statement
+        FetchHashKeyName   => "NAME_lc",  # Be predictable for field names
+        LongReadLen        => 0x7FFFF,    # How big is your data?
+        }
+    ) or die "Couldn't connect to database: ".DBI->errstr;
+
+### We're not expecting binary data of more than 1024 KB...
+$dbh->{LongReadLen} = 1024 * 1024;
+
+my $isAudioDownloaded=0;
+
+my $sth = $dbh->prepare('SELECT name,file,md5_hash FROM voipuser.audiogreetings WHERE accountcode=? AND name=?');
+my $newname = "";
+$sth->execute($Company,$fileName);
+
+my $num_rows = $sth->rows();  # get row count
+my $filelocation = "$path" . "$fileName";
+
+print "filename: $fileName\n";
+
+if (-d $path) {
+	print "Path exists $path\n";
+}else {
+	#Get the path portion only, without the filename.
+	if (-e $path) 
+	{
+      		print "Directory exists.\n";
+	}else
+	{
+        	mkdir $path or die "Error creating directory: $1: $!";
+	}
+
+	print "$path was created!";
+}
+
+
+my $logFilename0 = '/tmp/report0.txt';
+open(my $fh1, '>>', $logFilename0) or die "Could not open file '$logFilename0' $!";
+print $fh1 "From downloadAudio.agi fileName=$fileName lang=$language Company=$Company num_rows=$num_rows isAudioDownloaded=$isAudioDownloaded path=$path \n";
+close $fh1;
+
+
+
+if($num_rows > 0){
+	$isAudioDownloaded=1;
+	my $ref = $sth->fetchrow_hashref;
+	my $newdata = $$ref{'file'};
+	my $md5_hash = $$ref{'md5_hash'};
+	$newname = $$ref{'name'};
+	
+	print "New name=$newname\n"; 
+	print "filelocation= $filelocation\n";
+	print "filelocation=$filelocation.wav\n";
+
+	# my $filetoBeTested="$filelocation" . "_$md5_hash" . ".wav";
+	my $filetoBeTested="$filelocation.wav";
+        # if (open (OUTPUT, '>',$filelocation . "_$md5_hash" . ".wav"))
+	if (open (OUTPUT, '>',$filetoBeTested))
+        {
+                print OUTPUT $newdata;
+                close OUTPUT;
+        }
+
+
+
+	if($isAudioDownloaded){
+		# my $format=`/usr/bin/ffprobe -i /var/lib/asterisk/sounds/$language/$Company/$filetoBeTested -show_entries stream=codec_name -select_streams a:0 -of compact=p=0:nk=1 -v 0`;
+		my $format=`/usr/bin/ffprobe -i $filetoBeTested -show_entries stream=codec_name -select_streams a:0 -of compact=p=0:nk=1 -v 0`;
+		# my $channels=`/usr/bin/ffprobe -i /var/lib/asterisk/sounds/$language/$Company/$filetoBeTested -show_entries stream=channels -select_streams a:0 -of compact=p=0:nk=1 -v 0`;
+		my $channels=`/usr/bin/ffprobe -i $filetoBeTested -show_entries stream=channels -select_streams a:0 -of compact=p=0:nk=1 -v 0`;
+		# my $sample_rate=`/usr/bin/ffprobe -i /var/lib/asterisk/sounds/$language/$Company/$filetoBeTested -show_entries stream=sample_rate -select_streams a:0 -of compact=p=0:nk=1 -v 0`;
+		my $sample_rate=`/usr/bin/ffprobe -i $filetoBeTested -show_entries stream=sample_rate -select_streams a:0 -of compact=p=0:nk=1 -v 0`;
+
+		print "channels=$channels\n";
+		print "codec_name=$format 1\n";
+		print "sample_rate=$sample_rate\n";
+
+		# Trim spaces
+		$format=~ s/^\s+|\s+$//g;
+		# my $md5 = Digest::MD5->new;
+
+		my $digest = file_md5_hex( $filetoBeTested );
+		if($format ne "pcm_s16le" || $channels != 1 || $sample_rate != 8000){
+			print "Not good. Needs to be converted\n";
+			# my $convertResult = `/usr/bin/ffmpeg -y -i $filelocation -ar 8000 -ac 1 $path$fileName\_$digest.wav`;
+			my $convertResult = `/usr/bin/ffmpeg -y -i $filetoBeTested -ar 8000 -ac 1 $path$fileName\_$digest.wav`;
+			unlink("$path$fileName.wav")                 or die "Can't delete $path$fileName.: $!\n";
+			print "\n\nEnd of conversion\n";
+			print "filetoBeTested=$filetoBeTested\n";
+			print "$path$fileName\_$digest.wav\n";
+			say "converted=$convertResult\n";
+		}
+	}
+}
+
+
+#  Debugging stuff
+my $logFilename = '/tmp/report.txt';
+open(my $fh, '>>', $logFilename) or die "Could not open file '$logFilename' $!";
+print $fh "From downloadAudio.agi fileName=$fileName lang=$language Company=$Company num_rows=$num_rows isAudioDownloaded=$isAudioDownloaded path=$path \n";
+close $fh;
+
+print $language . "\n";
+print $path . "\n";
+print $num_rows . "\n";
+print $isAudioDownloaded . "\n";
+
+$sth->finish();
+
+$dbh->disconnect;
+# $AGI->set_variable("ATENDEDOR_FILENAME", $newname);
+
+exit;

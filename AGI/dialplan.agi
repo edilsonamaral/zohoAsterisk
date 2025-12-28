@@ -1,0 +1,88 @@
+#!/usr/bin/perl
+
+use strict;
+use DBI;
+use Data::UUID;
+use Asterisk::AGI;
+use File::Copy;
+
+$|=1;
+
+my $AGI = new Asterisk::AGI;
+
+# ##############################################################
+
+my $callerid = $ARGV[0];
+my $dialplanId = $ARGV[1];
+my $context = $ARGV[2];
+my $audioId = $ARGV[3];
+my $jobTime = $ARGV[4];
+my $accountcode = $ARGV[5];
+
+# ##############################################################
+
+my $path='BROADCAST/';
+my $AUDIOFILESPATH='/var/lib/asterisk/sounds/en/';
+my $ug = new Data::UUID;
+my $tmpFileName = $ug->create_hex();
+
+our $dbh = DBI->connect('DBI:mysql:voipuser:localhost','edilson','ed6208893',{ RaiseError => 1 });
+my $sth2 = $dbh->prepare('SELECT file FROM voipuser.audiofiles WHERE id=?');
+$sth2->execute($audioId);
+
+my $num_rows = $sth2->rows();  # get row count
+
+my $isAudioDownloaded=0;
+
+if($num_rows > 0){
+        if (open (OUTPUT, ">$AUDIOFILESPATH$path" . $tmpFileName . ".mp3"))
+        {
+                $isAudioDownloaded=1;
+                my $ref = $sth2->fetchrow_hashref;
+                my $newdata = $$ref{'file'};
+                print OUTPUT $newdata;
+                close OUTPUT;
+        }
+}
+
+# if no audio downloaded exit !! if no dialplan id exit !!
+unless($isAudioDownloaded==1 || $dialplanId>0){exit;}
+
+# if no dialplan id exit !!
+# unless($dialplanId>0){exit;}
+
+my $results = $dbh->selectall_arrayref(<<SQL);
+        SELECT id,phone FROM voipuser.dialplanJobs WHERE dialplanId=$dialplanId AND completed=0 AND attempts<3 GROUP BY phone;
+SQL
+
+my $i=0;
+for ( @{$results} ) {
+
+                my $dialplanJobId = $_->[0];
+                my $phone = $_->[1];
+                my $ug = new Data::UUID->new();
+                my $tmpCallfile = $ug->create_from_name_str($ug->create_str(), "edilsonSalt");
+                my $newAudio = $path . $tmpCallfile . ".call";
+                my $dialcommand="Channel:SIP/voipms/$phone\nCallerid:$callerid\nWaitTime:20\nMaxRetries:2\nRetryTime:60\nExtension:2103\nPriority:1\nContext:ivr-DEMO\nAccount:$accountcode\n";
+                my $infoToPass="Set: var1=$path$tmpFileName^$dialplanJobId";
+
+                open FILE, ">", $AUDIOFILESPATH . $newAudio or die $!;
+                print FILE $dialcommand;
+                print FILE $infoToPass;
+                close FILE or die $!;
+                # utime($jobTime,$jobTime,$AUDIOFILESPATH$newAudio);
+                $i++;
+                if($i>10)
+                {
+                        $i=0;
+                        sleep(int(rand(60))+30);
+                }
+                move($AUDIOFILESPATH . $newAudio,"/var/spool/asterisk/outgoing/$tmpCallfile" . ".call") or die "can't move $newAudio: $!";
+                sleep(int(rand(5)));
+}
+
+$sth2->finish();
+
+# print "EXEC Playback \"$path\"\n";
+
+$dbh->disconnect;

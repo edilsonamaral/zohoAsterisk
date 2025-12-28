@@ -1,0 +1,61 @@
+#!/usr/bin/perl
+
+use strict;
+use DBI;
+use Data::UUID;
+use Asterisk::AGI;
+
+
+$|=1;
+
+# AGI(uploadMessage.agi,${CUSTOM_RECORDINGS_PATH},${RECORDED_FILE},${CustomFileName},${CompanyId},${NOTES});
+
+my $AGI = new Asterisk::AGI;
+my $path = $ARGV[0];
+my $fileNameAndPath = $ARGV[1];
+my $CustomfileName = $ARGV[2];
+my $CompanyId = $ARGV[3];
+my $Notes = $ARGV[4];
+
+my $blob;
+# $fileNameAndPath="/var/lib/asterisk/sounds/";
+open(FILEH, $fileNameAndPath) or die $!;
+read (FILEH,$blob,-s  $fileNameAndPath);
+# my $blob=<FILEH>;
+close FILEH;
+print $fileNameAndPath;
+
+our $dbh = DBI->connect('DBI:mysql:voipuser:localhost','edilson','ed6208893',{ RaiseError => 1 });
+
+my $sth = $dbh->prepare('INSERT INTO voipuser.audiofiles (name,file,companyid,notes,datecreated) VALUES (?,?,?,?,NOW())');
+
+# my $sth2 = $dbh->prepare('SELECT announcement FROM asterisk.announcements WHERE id=?');
+
+$sth->execute($CustomfileName,$blob,$CompanyId,$Notes);
+$sth->finish();
+
+$AGI->set_variable('UPLOADED','TRUE');
+
+# $sth2->execute(1024);
+
+# my $num_rows = $sth2->rows();  # get row count
+
+# if($num_rows > 0){
+#        if (open (OUTPUT, ">/tmp/1.wav"))
+#        {
+#                my $ref = $sth2->fetchrow_hashref;
+#                my $newdata = $$ref{'announcement'};
+#                print OUTPUT $newdata;
+#                close OUTPUT;
+#                # $dbh->disconnect;
+#               print "EXEC Playback \"/tmp/1\"\n";
+#        }
+# }
+
+# $sth2->finish();
+
+# print "EXEC Playback \"$path\"\n";
+
+$dbh->disconnect;
+exit;
+

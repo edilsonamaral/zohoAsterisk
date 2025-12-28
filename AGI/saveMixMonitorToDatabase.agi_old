@@ -1,0 +1,142 @@
+#!/usr/bin/perl
+
+##                local Name=${CALLERID(name)};
+##                local Num=${CALLERID(num)};
+##                local To=${EXTEN};
+##                local CommandToMix="/var/lib/asterisk/agi-bin/saveMixMonitorToDatabase.agi";
+##                local notes="none";
+##                local mixname="${Num}-${STRFTIME(${EPOCH},America/New_York,%m-%d-%Y_%H_%M_%S)}";
+##                local pathToMonitorFolder="/var/spool/asterisk/monitor/${CUSTOMERSNAME}";
+
+## MixMonitor(${pathToMonitorFolder}/${mixname}.wav,b,${CommandToMix} ${pathToMonitorFolder} ${mixname} ${CUSTOMERSNAME} ${notes} "${Name}" "${Num}" ${To} ${UNIQUEID});
+
+use strict;
+use warnings;
+use DBI;
+use Data::UUID;
+use Asterisk::AGI;
+use Cwd qw(cwd);
+## Also install DBD::mysql
+
+$|=1;
+
+local $SIG{__WARN__} = sub {
+	my $message = shift;
+	logger('warning', $message);
+};
+
+##  needs LAME, DBI:mysql, DBD::mysql
+
+my $AGI = new Asterisk::AGI;
+my $CustomfileName = $ARGV[0];
+my $CompanyName = $ARGV[1];
+my $Notes = $ARGV[2];
+my $FromName = $ARGV[3];
+my $FromNum = $ARGV[4];
+my $To  = $ARGV[5];
+my $CDR_UNIQUEID = $ARGV[6];
+my $monitorPath = "/var/spool/asterisk/monitor";
+my $logfile = "/tmp/log.$CustomfileName";
+
+# ${pathToMonitorFolder} ${mixname} ${CUSTOMERSNAME} '${notes}' "${FromName}" "${FromNum}" ${To} ${CDR(userfield)});
+
+if (open my $out1, '>>', "/tmp/log.$CustomfileName") {
+	print $out1 "Top  \n";
+	close $out1;
+}
+
+print "pathToMonitorFolder= $CustomfileName\n";
+print "CustomfileName=$CustomfileName\n";
+
+my $blob;
+my $wavFileName = "$CustomfileName.wav";
+my $mp3FileName = "$CustomfileName.mp3";
+my $absolutePath = "$monitorPath/$CompanyName/$CustomfileName";
+
+print "Absolute Path:$absolutePath\n";
+print "Wave name: $wavFileName\n";
+print "Mp3 name: $mp3FileName\n";
+
+my $wavfileLocation = "$absolutePath.wav";
+my $mp3fileLocation = "$absolutePath.mp3";
+
+chdir($monitorPath) or die "$!";
+
+my $wavFileSize = -s $wavfileLocation;
+if($wavFileSize < 1024*5){
+
+	##if (open my $out1, '>>', "/tmp/log.$CustomfileName") {
+        ##        print $out1 "File size is too small $wavFileSize. From saveMixMonitorToDatabase.agi \n";
+        ##        close $out1;
+	##}
+
+	$AGI->verbose("⚠️ WAV file is too small to process: $wavFileSize bytes", 1);
+	print "************** File size is too small. wavFileSize=$wavFileSize K\n";
+	exit;
+}
+
+my $PathToLame = `which lame`;
+print $PathToLame;
+
+if (open my $out1, '>>', "/tmp/log.$CustomfileName") {
+	print $out1 "Lame  \n";
+	close $out1;
+}
+
+##$mp3fileLocation = "/$tempNew/$CompanyName/$CustomfileName.mp3";
+
+print "wavefileLocation=$wavfileLocation\n";
+print "mp3fileLocation=$mp3fileLocation\n";
+
+print "$wavfileLocation exists!\n" if -f $wavfileLocation;  # if file is a plain file
+
+system("/usr/bin/lame", "-V 2", $wavfileLocation, $mp3fileLocation);
+
+        if (open my $out, '>>', "/tmp/log.$CustomfileName") {
+                print $out "level - $CustomfileName \n";
+		close $out;
+        }
+
+print "$?\n";
+
+my $mp3FileSize = -s $mp3fileLocation;
+print "Size:$mp3FileSize\n";
+print "Edilson\n";
+
+if($mp3FileSize > 1024*5){
+	open(FILEH, $mp3fileLocation) or die $!;
+	read (FILEH,$blob,-s $mp3fileLocation);
+	close FILEH;
+
+	our $dbh = DBI->connect('DBI:mysql:voipuser_media:127.0.0.1:3306','edilson','Ed6208893Ed',{ 
+		RaiseError => 1  ### Don't report errors via warn( )
+	});
+
+	my $sth = $dbh->prepare('INSERT INTO voipuser_media.audiofiles (name,file,accountcode,notes,callername,callernum,filesize,cdruniqueid,datecreated) VALUES (?,?,?,?,?,?,?,?,NOW())');
+	$sth->execute($CustomfileName,$blob,$CompanyName,$Notes,$FromName,$FromNum,$mp3FileSize,$CDR_UNIQUEID);
+
+	$sth->finish();
+	$dbh->disconnect;
+	print "File uploaded.\n";
+}else{
+##	delete the audio files
+##	unlink "$wavfileLocation";
+##	unlink "$mp3fileLocation";
+}
+
+print "$wavfileLocation\n";
+print "$mp3fileLocation\n";
+
+sub logger {
+        if (open my $out, '>>', 'edilson_log.txt') {
+               ## chomp $msg;
+                print $out "Edilson level - msg\n";
+        }
+
+	my ($level, $msg) = @_;
+	if (open my $out, '>>', '/tmp/log.txt') {
+		chomp $msg;
+		print $out "$level - $msg\n";
+	}
+}
+exit;

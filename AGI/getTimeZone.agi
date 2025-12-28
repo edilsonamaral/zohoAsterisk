@@ -1,0 +1,49 @@
+#!/usr/bin/env perl
+# yum install perl-DateTime 
+# cpan install Date::Parse
+
+use strict;
+use DateTime;
+use Date::Parse;
+use Asterisk::AGI;
+
+$|=1;
+
+my $AGI = new Asterisk::AGI;
+
+my $timezone = $ARGV[0];
+my $startTime =  $ARGV[1];
+my $endTime =  $ARGV[2];
+
+#### server local time
+#### my $dt2 = DateTime->now(time_zone => 'local');
+
+my $dt = DateTime->now(time_zone => $timezone);
+my $localtime = $dt->strftime("%Y-%m-%d %T");
+
+my $t_start = str2time("$startTime");
+my $t_end = str2time("$endTime");
+my $t3 = str2time("$localtime");
+
+# print "$t_start\n";
+# print "$t_end\n";
+# print "$t3\n";
+# print "$dt\n";
+
+if(($t_start>$t3 & $t_end>$t3)|($t_start<$t3 & $t_end<$t3))
+{
+	print "OFF HOURS\n";
+	$AGI->set_variable("ISOFFHOURS", "1");
+}
+else{
+	print "WORK TIME\n";
+	$AGI->set_variable("ISOFFHOURS", "0");
+}
+
+$AGI->set_variable("DIDLOCALTIME", "$localtime");
+
+print  $localtime;
+exit;
+
+# America/Sao_Paulo
+# perl /var/lib/asterisk/agi-bin/getTimeZone.agi America/Sao_Paulo "2013-12-07 02:33:11" "2013-12-07 02:38:12"
