@@ -204,26 +204,3 @@ context from-voipinnovations {
                 //Set(CUSTOMERSNAME=${CONTEXT:4});
         };
 };
-
-context from-didww {
-        _5[587]. => {
-		Set(Var_All=${SIP_HEADER(TO)});
-		Set(Caller=${CUT(Var_All,@,1)});   //  divide o header em 2
-                        Set(Var_TO=${Caller:5});           //  pega so os numeros depois dos 5 primeiros caracteres
-                        Set(Var_TO=${FILTER(0-9a-zA-Z,${Var_TO})});
-			Set(Original_Var_TO=${Var_TO});
-                        if(${LEN(${Var_TO})}<10){
-                                        Hangup();
-                        }
-                        &get-DID_DATA(${Var_TO:2});
-                        if(${LEN(${DB_DID})}==0){
-                                        &trap("${DB_DID}. Not found DIDWW");
-                        }
-                        &dispatcher(0);
-                        Hangup();
-        };
-        h => {
-//                        &do-hangup();
-//                        Hangup();
-        };
-};

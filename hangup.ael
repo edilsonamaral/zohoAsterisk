@@ -129,6 +129,8 @@ noop(callerid number=${CALLERID(num)});
         }
 
         noop(Account ${CUSTOMERSNAME} is hanging up.);
+
+//	Hangup();
 	return;
 }
 

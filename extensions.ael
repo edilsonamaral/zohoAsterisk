@@ -768,11 +768,7 @@ macro handle-FWD-gr(attempt) {
 		}
 
 		Set(LOCAL(pMusic)=${IF("${DB_PLAYMUSICTRANSFER}"=="1" ? m(${CUSTOMERSNAME}_${CHANNEL(language)}):r)});
-		Dial(${GROUP_FIRST},${GR_RING_TO_01},${pMusic}U(SetIsIncomingAnswered^${CUSTOMERSNAME}^${Var_From:-10}^${CALLSTART_GMT})iTtKk);
-		if("${HANGUPCAUSE}"="17"){  //  Busy
-			Noop(Peer is DIALGROUP is busy or rejected the call);
-			return;
-		}
+		Dial(${GROUP_FIRST},${GR_RING_TO_01},${pMusic}U(SetIsIncomingAnswered^${CUSTOMERSNAME}^${Var_From:-10}^${CALLSTART_GMT})TtKk);
 	}
 	return;
 }
